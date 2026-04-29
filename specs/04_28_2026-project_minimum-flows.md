@@ -51,10 +51,10 @@ Important fields:
 ## Deployment
 Railway
 
-classification pipeline worker
+api server
+worker service
 redis service (job queue + pub/sub)
-Bucket service
-postgresql service
+postgres service
 
 
 railway deployment
