@@ -1,0 +1,14 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# The Dockerfile already wraps `alembic upgrade head` and `uvicorn` with proxy-headers.
+# healthcheckPath gates promotion on the app actually serving 200s — without it,
+# Railway only does TCP-bind checks and a container that boots, opens the port, then
+# crashes (e.g. settings ValidationError, alembic failure) gets marked healthy.
+# Timeout is generous so cold starts that include a fresh `alembic upgrade head` pass.
+healthcheckPath = "/api/health"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
