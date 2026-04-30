@@ -1,4 +1,7 @@
-from fastapi import FastAPI
+from pathlib import Path
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from app.api.auth import router as auth_router
 from app.api.gmail import router as gmail_router
 from app.config import get_settings
@@ -13,3 +16,28 @@ app.include_router(gmail_router)
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "env": settings.env}
+
+
+_STATIC_DIR = Path(__file__).parent / "static"
+_INDEX = _STATIC_DIR / "index.html"
+
+# Mount built bundle assets at /assets (vite emits hashed files there).
+_assets = _STATIC_DIR / "assets"
+if _assets.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def spa_catch_all(full_path: str, request: Request):
+    # Reserved API/auth/asset paths are handled by their own routers (and 404 here is fine
+    # because FastAPI matches more-specific routes first). This catch-all only fires for
+    # the leftover routes — i.e. SPA routes.
+    if full_path.startswith(("api/", "auth/", "assets/")):
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    if _INDEX.exists():
+        return FileResponse(_INDEX)
+    # Helpful when the frontend hasn't been built yet.
+    return JSONResponse(
+        {"detail": "frontend not built. Run scripts/build_frontend.sh."},
+        status_code=503,
+    )
