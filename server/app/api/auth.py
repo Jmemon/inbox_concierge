@@ -30,6 +30,21 @@ def _cookie_kwargs(*, max_age: int | None = None) -> dict:
     return kw
 
 
+# Mirror the secure/samesite/domain attributes from the original Set-Cookie when
+# deleting. Strict browsers (Chrome) refuse to clear a cookie when the deletion
+# header's attributes don't match, which would otherwise leave session cookies
+# stuck after logout in production (where cookie_secure=True or COOKIE_DOMAIN is set).
+def _delete_cookie(resp: Response, name: str) -> None:
+    s = get_settings()
+    resp.delete_cookie(
+        name,
+        path="/",
+        domain=s.cookie_domain,
+        secure=s.cookie_secure,
+        samesite="lax",
+    )
+
+
 @router.get("/login")
 def login() -> Response:
     raw, signed = state_cookie.make_state()
@@ -51,7 +66,7 @@ def callback(
     if error:
         reason = "denied" if error == "access_denied" else error
         resp = RedirectResponse(url=f"/?authError={reason}", status_code=302)
-        resp.delete_cookie(STATE_COOKIE, path="/")
+        _delete_cookie(resp, STATE_COOKIE)
         return resp
 
     if not state_cookie.verify_state(cookie_value=oauth_state, url_value=state):
@@ -88,7 +103,7 @@ def callback(
 
     resp = RedirectResponse(url="/", status_code=302)
     resp.set_cookie(SESSION_COOKIE, sid, max_age=s.session_ttl_seconds, **_cookie_kwargs())
-    resp.delete_cookie(STATE_COOKIE, path="/")
+    _delete_cookie(resp, STATE_COOKIE)
     return resp
 
 
@@ -116,5 +131,5 @@ def logout(
     if session:
         sessions.revoke_session(db, session_id=session)
     resp = Response(status_code=204)
-    resp.delete_cookie(SESSION_COOKIE, path="/")
+    _delete_cookie(resp, SESSION_COOKIE)
     return resp
