@@ -8,11 +8,19 @@ must support CRUD. not just adding messages/threads/users/buckets, but also dele
 users
  - id: string uuid
  - email: string
+ - name: string (from google userinfo, for display)
+ - gmail_refreshToken: text, encrypted at rest with ENCRYPTION_KEY. obtained on first oauth (access_type=offline + prompt=consent), used to mint access tokens later
+ - gmail_accessToken: text, encrypted at rest. short-lived, refreshed on demand
+ - gmail_accessTokenExpiresAt: timestamp
  - gmail_lastHistoryId
 
-sessions (for oauth sessions)
- - 
- - userId: fk to users.id
+sessions (cookie sessions, opaque id as cookie value)
+ - id: random urlsafe string (>=32 bytes), this is the cookie value. HttpOnly, Secure, SameSite=Lax
+ - userId: fk to users(id)
+ - createdAt: timestamp
+ - expiresAt: timestamp. fixed ttl from SESSION_TTL_SECONDS (default 30 days). queries filter expiresAt > now() and revokedAt is null
+ - lastSeenAt: timestamp, updated on each authed request. could later be used for sliding refresh, not doing that yet
+ - revokedAt: timestamp nullable, set on logout
 
 custom_buckets
  - id: string
@@ -57,4 +65,6 @@ email attachments
 postgres table with email metadata + classifications (minimal dont need everything, KISS for this demo project) (and fk to users for each email, makes sense for consumer app, hypothetically if thinking enterprise go per-user table ie schema-per-etant). then blob storage for headers + bodies + MIME-encoded attachments.
 postgres table with user info. authenticated gsuite stuff so they can login without re-authenticating. 
 WHere do custom buckets + classification criteria go? postgres for bucket names linkes to user row and then maybe a key in a key-value non-relational db to a string that is teh classifciation criteria? no. classificaiotn criteria won't get so large, just include a text column in the buckets table
+
+gmail oauth tokens go on users (1:1, KISS). encrypt at rest because refresh tokens are bearer creds. if we ever support multi-account-per-user split into a gmail_credentials table.
 

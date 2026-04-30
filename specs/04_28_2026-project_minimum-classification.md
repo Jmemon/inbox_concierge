@@ -59,16 +59,9 @@ full_sync_inbox(userId)
 redis
 for sync results
 
-### cache
-redis
-user: custom buckets with criteria
-questioning the need for this if we can just query postgres
 
-### classification worker
-Worker.
-One job is a list of threads to classify.
-The worker can launch N classification runs at a time. Each run is for a whole thread.
-Returns all classifications.
+### classification function
+classifhy threaeds given threads and bucket criteria
 
 
 
