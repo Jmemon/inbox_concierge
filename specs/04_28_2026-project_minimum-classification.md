@@ -50,7 +50,7 @@ publish done notification to pub/sub channel for job.
 
 
 ### job queue
-redis underlying, interace with celery
+redis underlying, interface with celery
 
 partial_sync_inbox(userId, newHistoryRecords)
 full_sync_inbox(userId)
@@ -61,7 +61,16 @@ for sync results
 
 
 ### classification function
-classifhy threaeds given threads and bucket criteria
+classify threads given threadstrings and bucket criteria
+
+
+
+
+### Default buckets
+Important
+Can wait
+Auto-archive
+Newsletter
 
 
 

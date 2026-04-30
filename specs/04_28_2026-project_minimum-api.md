@@ -46,6 +46,8 @@ SESSION_TTL_SECONDS (default 30 days)
 ENCRYPTION_KEY (encrypts gmail tokens at rest. set once, never rotate casually - rotating strands every stored refresh token)
 COOKIE_DOMAIN (only when on a custom domain; leave unset on railway-issued hosts)
 
+###
+
 gmail session for user:
  - userId
  - nextPageToken
