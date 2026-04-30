@@ -1,2 +1,27 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
 
-.env*
+# uv / node
+uv.lock.bak
+node_modules/
+dist/
+.vite/
+
+# env (never commit secrets)
+.env
+*.env
+!.env.example
+client/.env
+client/.env.*
+
+# build outputs
+server/app/static/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
