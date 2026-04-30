@@ -11,7 +11,7 @@ if [ ! -f "$ROOT/.env" ]; then
 fi
 
 echo "==> starting postgres"
-docker compose -f "$ROOT/docker-compose.yml" up -d postgres
+docker compose -f "$ROOT/docker-compose.yml" up -d --wait postgres
 
 echo "==> applying migrations"
 ( cd "$ROOT/server" && uv run alembic upgrade head )
