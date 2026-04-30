@@ -2,8 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
 
-// Build outputs land inside the python package so FastAPI's StaticFiles mount picks them up.
-const OUT_DIR = path.resolve(__dirname, '../server/app/static')
+const OUT_DIR = process.env.VITE_OUT_DIR
+  ? path.resolve(process.env.VITE_OUT_DIR)
+  : path.resolve(__dirname, '../server/app/static')
 
 export default defineConfig({
   plugins: [react()],
