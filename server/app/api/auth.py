@@ -1,11 +1,12 @@
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db.models import User
 from app.db.session import get_db
+from app.deps import get_current_user
 from app.services import crypto, google_oauth, sessions, state_cookie
 
 
@@ -108,19 +109,8 @@ def callback(
 
 
 @router.get("/me")
-def me(
-    session: str | None = Cookie(default=None),
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    if not session:
-        return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    s = sessions.lookup_active_session(db, session_id=session)
-    if s is None:
-        return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    user = db.get(User, s.user_id)
-    if user is None:
-        return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    return JSONResponse({"id": user.id, "email": user.email, "name": user.name})
+def me(user: User = Depends(get_current_user)) -> dict:
+    return {"id": user.id, "email": user.email, "name": user.name}
 
 
 @router.post("/logout", status_code=204)
