@@ -148,3 +148,20 @@ def test_thread_string_representation_for_classifier_includes_headers_and_bodies
     text = message_parser.thread_to_string(thread)
     assert "Subject: re: roadmap" in text
     assert "ship friday" in text
+
+
+def test_body_text_is_full_decoded_body_not_truncated():
+    long = "x" * 500
+    parsed = message_parser.parse_message(_flat_message(body_text=long))
+    assert len(parsed.body_text) == 500
+    assert len(parsed.body_preview) == 100
+
+
+def test_thread_to_string_includes_full_bodies_for_classifier():
+    """thread_to_string is the classifier's input — it must contain the full
+    bodies, not the 100-char ui previews."""
+    long_body = "x" * 500 + " UNIQUE_TAIL"
+    msgs = [_flat_message(subject="thread", body_text=long_body)]
+    thread = message_parser.assemble_thread(thread_id="t1", raw_messages=msgs)
+    text = message_parser.thread_to_string(thread)
+    assert "UNIQUE_TAIL" in text

@@ -19,7 +19,10 @@ References:
 """
 
 import base64
+import logging
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,7 +34,8 @@ class ParsedMessage:
     subject: str | None
     from_addr: str | None
     to_addr: str | None
-    body_preview: str  # first 100 chars of decoded body, "" if absent
+    body_text: str    # full decoded body (used by classifier; not persisted)
+    body_preview: str # first 100 chars (persisted; what UI renders)
 
 
 @dataclass
@@ -46,7 +50,10 @@ def _b64url_decode(data: str) -> str:
     padding = "=" * (-len(data) % 4)
     try:
         return base64.urlsafe_b64decode(data + padding).decode("utf-8", errors="replace")
-    except Exception:
+    except Exception as exc:
+        # binascii.Error means the gmail payload's base64 is corrupt; we want a
+        # signal in worker logs so we can spot bad data, not silent ""s.
+        log.warning("b64url_decode failed: %s", exc)
         return ""
 
 
@@ -98,6 +105,7 @@ def parse_message(raw: dict) -> ParsedMessage:
         subject=_header(payload, "Subject"),
         from_addr=_header(payload, "From"),
         to_addr=_header(payload, "To"),
+        body_text=body_text,
         body_preview=body_text[:100],
     )
 
@@ -117,7 +125,12 @@ def assemble_thread(*, thread_id: str, raw_messages: list[dict]) -> ParsedThread
 
 
 def thread_to_string(thread: ParsedThread) -> str:
-    """Plain-text representation of a thread, used as input to the classifier."""
+    """Plain-text representation of a thread, used as input to the classifier.
+
+    Uses the full body_text (not body_preview) — the classifier needs to see the
+    whole message to make an accurate routing decision, even though the UI only
+    persists/displays the 100-char preview.
+    """
     lines: list[str] = []
     lines.append(f"Thread subject: {thread.subject or '(no subject)'}")
     for m in thread.messages:
@@ -126,5 +139,5 @@ def thread_to_string(thread: ParsedThread) -> str:
         lines.append(f"To: {m.to_addr or ''}")
         lines.append(f"Subject: {m.subject or ''}")
         lines.append("")
-        lines.append(m.body_preview)
+        lines.append(m.body_text)
     return "\n".join(lines)
