@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -7,10 +8,27 @@ from app.api.gmail import router as gmail_router
 from app.api.inbox import router as inbox_router
 from app.api.sse import router as sse_router
 from app.config import get_settings
+from app.services import pubsub
 
 
 settings = get_settings()
-app = FastAPI(title="inbox_concierge")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # The dispatcher is per-process: each uvicorn worker holds its own redis
+    # pubsub connection and routes incoming messages to its local SSE queues.
+    # The internal task waits on _has_subscription before touching redis, so
+    # apps that boot without ever opening an SSE connection (e.g. test runs
+    # that don't hit /api/sse) make zero network calls.
+    await pubsub.start()
+    try:
+        yield
+    finally:
+        await pubsub.stop()
+
+
+app = FastAPI(title="inbox_concierge", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(gmail_router)
 app.include_router(inbox_router)
