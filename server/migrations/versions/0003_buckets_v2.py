@@ -18,7 +18,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-from app.llm.default_criteria import DEFAULT_BUCKETS
+from app.llm.default_criteria import INITIAL_DEFAULT_BUCKETS
 
 
 revision: str = "0003_buckets_v2"
@@ -56,7 +56,7 @@ def upgrade() -> None:
 
     # 2) Insert new rows. user_id=None = default (shared across users).
     new_rows = []
-    for spec in DEFAULT_BUCKETS:
+    for spec in INITIAL_DEFAULT_BUCKETS:
         new_rows.append(
             {
                 "id": _new_uuid_for(spec["name"]),
