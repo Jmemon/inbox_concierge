@@ -30,16 +30,23 @@ export function subscribeSse(handler: (e: SseEvent) => void): () => void {
 function _open() {
   console.log('[sse] opening EventSource')
   _es = new EventSource('/api/sse', { withCredentials: true })
-  _es.onopen = () => { for (const h of _handlers) h({ event: '_open' }) }
+  _es.onopen = () => {
+    console.debug('[sse] open')
+    for (const h of _handlers) h({ event: '_open' })
+  }
   _es.onmessage = (ev) => {
     try {
       const parsed = JSON.parse(ev.data) as SseDataEvent
       if (parsed && typeof parsed === 'object' && (parsed as any).event) {
+        console.debug('[sse]', parsed.event, parsed)
         for (const h of _handlers) h(parsed)
       }
-    } catch { /* malformed frame; ignore */ }
+    } catch {
+      console.debug('[sse] malformed frame', ev.data)
+    }
   }
   _es.onerror = () => {
+    console.debug('[sse] error')
     for (const h of _handlers) h({ event: '_error' })
     _close()
     if (_handlers.size > 0) queueMicrotask(_open)
