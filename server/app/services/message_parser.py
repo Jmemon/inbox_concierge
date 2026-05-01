@@ -35,7 +35,7 @@ class ParsedMessage:
     from_addr: str | None
     to_addr: str | None
     body_text: str    # full decoded body (used by classifier; not persisted)
-    body_preview: str # first 100 chars (persisted; what UI renders)
+    body_preview: str # first 150 chars (persisted; what UI renders)
 
 
 @dataclass
@@ -106,7 +106,7 @@ def parse_message(raw: dict) -> ParsedMessage:
         from_addr=_header(payload, "From"),
         to_addr=_header(payload, "To"),
         body_text=body_text,
-        body_preview=body_text[:100],
+        body_preview=body_text[:150],
     )
 
 

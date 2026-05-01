@@ -117,10 +117,10 @@ def test_parse_falls_back_to_text_html_when_no_text_plain_present():
     assert "html" in parsed.body_preview
 
 
-def test_body_preview_truncates_to_100_chars():
+def test_body_preview_truncates_to_150_chars():
     long_body = "x" * 500
     parsed = message_parser.parse_message(_flat_message(body_text=long_body))
-    assert len(parsed.body_preview) == 100
+    assert len(parsed.body_preview) == 150
 
 
 def test_missing_body_yields_empty_preview():
@@ -154,12 +154,12 @@ def test_body_text_is_full_decoded_body_not_truncated():
     long = "x" * 500
     parsed = message_parser.parse_message(_flat_message(body_text=long))
     assert len(parsed.body_text) == 500
-    assert len(parsed.body_preview) == 100
+    assert len(parsed.body_preview) == 150
 
 
 def test_thread_to_string_includes_full_bodies_for_classifier():
     """thread_to_string is the classifier's input — it must contain the full
-    bodies, not the 100-char ui previews."""
+    bodies, not the 150-char ui previews."""
     long_body = "x" * 500 + " UNIQUE_TAIL"
     msgs = [_flat_message(subject="thread", body_text=long_body)]
     thread = message_parser.assemble_thread(thread_id="t1", raw_messages=msgs)
