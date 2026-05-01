@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, ForeignKey
+from sqlalchemy import String, Text, DateTime, ForeignKey, BigInteger
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -33,3 +33,41 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class Bucket(Base):
+    __tablename__ = "buckets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # null user_id => default bucket shared by all users
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    criteria: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class InboxThread(Base):
+    __tablename__ = "inbox_threads"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    gmail_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    subject: Mapped[str | None] = mapped_column(Text)
+    bucket_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("buckets.id"))
+    # recent_message_id can't FK at row-create time (chicken/egg); it's a soft pointer.
+    recent_message_id: Mapped[str | None] = mapped_column(String(36))
+
+
+class InboxMessage(Base):
+    __tablename__ = "inbox_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(36), ForeignKey("inbox_threads.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    gmail_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    gmail_thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # int64 ms since epoch, mirrors Gmail's MessagePart.internalDate
+    gmail_internal_date: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    gmail_history_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_addr: Mapped[str | None] = mapped_column(Text)
+    from_addr: Mapped[str | None] = mapped_column(Text)
+    body_preview: Mapped[str | None] = mapped_column(String(200))
