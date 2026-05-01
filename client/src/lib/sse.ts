@@ -1,44 +1,49 @@
-// Thin typed wrapper around browser EventSource. Server emits messages of the
-// shape `data: { "thread_ids": string[] }\n\n`. Comment frames (`: keepalive`)
-// don't fire onmessage so we don't need to filter them.
-
-export type ThreadIdsEvent = { thread_ids: string[] }
-
-export type SseHandle = {
-  close: () => void
+export type PreviewExample = {
+  thread_id: string
+  subject: string
+  sender: string
+  score: number
+  rationale: string
+  snippet: string
 }
 
-export function openInboxStream(
-  onMessage: (e: ThreadIdsEvent) => void,
-  onError?: (e: Event) => void,
-): SseHandle {
-  console.log('[sse] constructing EventSource /api/sse')
-  const es = new EventSource('/api/sse', { withCredentials: true })
+export type SseDataEvent =
+  | { event: 'threads_updated'; thread_ids: string[] }
+  | { event: 'bucket_draft_preview'; draft_id: string; positives: PreviewExample[]; near_misses: PreviewExample[] }
+  | { event: 'extend_complete'; thread_ids: string[]; more: boolean }
 
-  es.onmessage = (ev) => {
+export type SseConnEvent = { event: '_open' } | { event: '_error' }
+export type SseEvent = SseDataEvent | SseConnEvent
+
+let _es: EventSource | null = null
+const _handlers = new Set<(e: SseEvent) => void>()
+
+export function subscribeSse(handler: (e: SseEvent) => void): () => void {
+  _handlers.add(handler)
+  if (!_es) _open()
+  return () => {
+    _handlers.delete(handler)
+    if (_handlers.size === 0) _close()
+  }
+}
+
+function _open() {
+  console.log('[sse] opening EventSource')
+  _es = new EventSource('/api/sse', { withCredentials: true })
+  _es.onopen = () => { for (const h of _handlers) h({ event: '_open' }) }
+  _es.onmessage = (ev) => {
     try {
-      const parsed = JSON.parse(ev.data) as ThreadIdsEvent
-      if (parsed && Array.isArray(parsed.thread_ids)) {
-        console.log('[sse] onmessage thread_ids.length=', parsed.thread_ids.length)
-        onMessage(parsed)
+      const parsed = JSON.parse(ev.data) as SseDataEvent
+      if (parsed && typeof parsed === 'object' && (parsed as any).event) {
+        for (const h of _handlers) h(parsed)
       }
-    } catch {
-      // ignore malformed frames; SSE keepalives don't fire onmessage anyway
-    }
+    } catch { /* malformed frame; ignore */ }
   }
-
-  if (onError) {
-    es.onerror = (e) => {
-      // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSED
-      console.warn('[sse] onerror readyState=', es.readyState, e)
-      onError(e)
-    }
-  }
-
-  return {
-    close: () => {
-      console.log('[sse] close() called readyState=', es.readyState)
-      es.close()
-    },
+  _es.onerror = () => {
+    for (const h of _handlers) h({ event: '_error' })
+    _close()
+    if (_handlers.size > 0) queueMicrotask(_open)
   }
 }
+
+function _close() { _es?.close(); _es = null }

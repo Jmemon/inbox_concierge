@@ -73,7 +73,9 @@ def test_poll_new_messages_publishes_when_history_returns_records(
 
     msg = ps.get_message(timeout=1.0)
     assert msg and msg["type"] == "message"
-    assert json.loads(msg["data"])["thread_ids"] == ["gT1"]
+    body = json.loads(msg["data"])
+    assert body["event"] == "threads_updated"
+    assert body["thread_ids"] == ["gT1"]
 
 
 def test_poll_new_messages_silent_when_history_returns_no_records(
@@ -117,7 +119,9 @@ def test_poll_new_messages_falls_back_to_full_sync_on_404(
     mock_partial.assert_not_called()
 
     msg = ps.get_message(timeout=1.0)
-    assert msg and json.loads(msg["data"])["thread_ids"] == ["gT_new"]
+    body = json.loads(msg["data"])
+    assert body["event"] == "threads_updated"
+    assert body["thread_ids"] == ["gT_new"]
 
 
 def test_poll_new_messages_does_full_sync_when_user_has_no_history_id(
@@ -136,7 +140,9 @@ def test_poll_new_messages_does_full_sync_when_user_has_no_history_id(
     mock_fetch.assert_not_called()
     mock_full.assert_called_once()
     msg = ps.get_message(timeout=1.0)
-    assert msg and json.loads(msg["data"])["thread_ids"] == ["gT_a"]
+    body = json.loads(msg["data"])
+    assert body["event"] == "threads_updated"
+    assert body["thread_ids"] == ["gT_a"]
 
 
 def test_enqueue_polls_purges_and_fans_out(fake_redis, monkeypatch):
