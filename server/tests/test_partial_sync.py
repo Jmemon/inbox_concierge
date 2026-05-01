@@ -100,3 +100,78 @@ def test_fetch_history_records_translates_404_to_history_gone_error(db):
     with patch("app.workers.gmail_sync.get_gmail_client", return_value=gmail):
         with pytest.raises(gmail_sync.HistoryGoneError):
             gmail_sync.fetch_history_records(gmail, start_history_id=u.gmail_last_history_id)
+
+
+def test_full_sync_inbox_pulls_latest_200_threads_and_writes(db):
+    u = _seed_user(db, history_id=None)
+
+    listing = {"threads": [{"id": f"gT{i}"} for i in range(3)]}
+    def _thread_fixture(thread_id: str) -> dict:
+        return {
+            "id": thread_id,
+            "messages": [{
+                "id": f"m_{thread_id}", "threadId": thread_id,
+                "internalDate": "1700000000000",
+                "historyId": "999",
+                "payload": {
+                    "mimeType": "text/plain",
+                    "headers": [{"name": "Subject", "value": thread_id}],
+                    "body": {"data": ""},
+                },
+            }],
+        }
+
+    gmail = MagicMock()
+    gmail.users().threads().list().execute.return_value = listing
+    gmail.users().threads().get().execute.side_effect = lambda *a, **kw: _thread_fixture(kw["id"])
+
+    with patch("app.workers.gmail_sync.get_gmail_client", return_value=gmail):
+        ids = gmail_sync.full_sync_inbox(db, user=u)
+
+    assert set(ids) == {"gT0", "gT1", "gT2"}
+    threads = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
+    assert {t.gmail_id for t in threads} == {"gT0", "gT1", "gT2"}
+    # full sync must populate last_history_id from the messages it ingested
+    assert db.get(User, "u1").gmail_last_history_id == "999"
+
+
+def test_full_sync_clears_existing_user_inbox_before_repopulating(db):
+    """Per spec: 'easy option: throw out what was in there'. Stale rows must
+    be deleted; the post-sync state should be exactly what gmail returned."""
+    u = _seed_user(db, history_id=None)
+
+    # Seed two stale threads that gmail's listing won't include.
+    inbox_repo.upsert_thread(db, user_id="u1", gmail_thread_id="STALE_A", subject="old", bucket_id=None)
+    inbox_repo.upsert_message(
+        db, user_id="u1", gmail_thread_id="STALE_A", gmail_message_id="m_stale_a",
+        gmail_internal_date=1, gmail_history_id="1",
+        to_addr=None, from_addr=None, body_preview="old",
+    )
+    inbox_repo.upsert_thread(db, user_id="u1", gmail_thread_id="STALE_B", subject="old", bucket_id=None)
+    db.commit()
+    assert {t.gmail_id for t in inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)} \
+        == {"STALE_A", "STALE_B"}
+
+    listing = {"threads": [{"id": "gT_NEW"}]}
+    new_thread = {
+        "id": "gT_NEW",
+        "messages": [{
+            "id": "m_new", "threadId": "gT_NEW",
+            "internalDate": "1700000000000", "historyId": "500",
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [{"name": "Subject", "value": "fresh"}],
+                "body": {"data": ""},
+            },
+        }],
+    }
+    gmail = MagicMock()
+    gmail.users().threads().list().execute.return_value = listing
+    gmail.users().threads().get().execute.return_value = new_thread
+
+    with patch("app.workers.gmail_sync.get_gmail_client", return_value=gmail):
+        ids = gmail_sync.full_sync_inbox(db, user=u)
+
+    assert ids == ["gT_NEW"]
+    surviving = {t.gmail_id for t in inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)}
+    assert surviving == {"gT_NEW"}, f"stale rows leaked into post-sync state: {surviving}"

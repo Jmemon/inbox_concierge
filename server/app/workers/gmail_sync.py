@@ -137,3 +137,45 @@ def partial_sync_inbox(
         inbox_repo.update_user_history_id(db, user_id=user.id, history_id=str(new_history_id))
     db.commit()
     return list(touched)
+
+
+def full_sync_inbox(db: Session, *, user: User) -> list[str]:
+    """Bootstrap / 404-recovery sync.
+
+    Per the workers spec ("easy option: throw out what was in there"), this
+    deletes the user's existing inbox_threads + inbox_messages and repopulates
+    from the 200 most-recently-active gmail threads. Avoids reconciliation
+    complexity for long offline gaps or expired history cursors.
+
+    Returns the touched gmail_thread_ids. Commits internally.
+    """
+    gmail = get_gmail_client(db, user)
+    bucket_ids = _available_bucket_ids(db, user.id)
+
+    # Nuke first. Order: messages → threads (FK constraint).
+    inbox_repo.clear_user_inbox(db, user_id=user.id)
+    db.flush()
+
+    listing = gmail.users().threads().list(userId="me", maxResults=200).execute()
+    thread_stubs = listing.get("threads", []) or []
+
+    touched: list[str] = []
+    max_history_id: int = 0
+    for stub in thread_stubs:
+        tid = stub["id"]
+        thread_resp = gmail.users().threads().get(userId="me", format="full").execute(id=tid)
+        parsed = assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or [])
+        _upsert_thread_with_messages(db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids)
+        for m in parsed.messages:
+            try:
+                hid = int(m.gmail_history_id)
+            except (TypeError, ValueError):
+                continue
+            if hid > max_history_id:
+                max_history_id = hid
+        touched.append(tid)
+
+    if max_history_id:
+        inbox_repo.update_user_history_id(db, user_id=user.id, history_id=str(max_history_id))
+    db.commit()
+    return touched
