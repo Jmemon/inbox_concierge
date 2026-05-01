@@ -19,7 +19,11 @@ router = APIRouter(prefix="/api", tags=["sse"])
 log = logging.getLogger(__name__)
 
 QUEUE_MAXSIZE = 100
-HEARTBEAT_SECONDS = 20
+# Tighter than the original 20s: Railway's edge / browser idle-killers
+# sometimes close streams that go quiet for tens of seconds, especially
+# during long-running worker tasks (reclassify_user_inbox can run ~110s).
+# Cheap insurance — a keepalive frame is just `: keepalive\n\n`.
+HEARTBEAT_SECONDS = 5
 ACTIVE_USERS_TTL_SECONDS = 60
 
 

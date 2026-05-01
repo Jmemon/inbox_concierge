@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../auth/useAuth'
 import { useInbox } from './inbox/useInbox'
 import { useInboxSse } from './inbox/useInboxSse'
@@ -18,6 +18,21 @@ export default function Home() {
 
   const inbox = useInbox({ buckets, filterSelection })
   useInboxSse({ onApply: inbox.applyThreadUpdates, snapshot: inbox.snapshot })
+
+  // Reclassify watchdog: POST /api/buckets enqueues reclassify_user_inbox,
+  // which takes ~30-150s and publishes threads_updated when done. SSE
+  // delivery during long-running tasks is unreliable (subscribers can churn
+  // mid-task and pubsub is fire-and-forget), so schedule explicit resyncs at
+  // 60s + 150s. resync() doesn't toggle the loading flag, so it doesn't flash
+  // the list — it just merges the current server state into the display layer.
+  const createWithWatchdog = useCallback(async (
+    body: Parameters<typeof create>[0],
+  ) => {
+    const bucket = await create(body)
+    setTimeout(() => { void inbox.resync() }, 60_000)
+    setTimeout(() => { void inbox.resync() }, 150_000)
+    return bucket
+  }, [create, inbox])
 
   // Hydrate the current page when navigating to a page whose thread ids are
   // not yet in the display layer.
@@ -63,7 +78,7 @@ export default function Home() {
 
       {showView && <ViewBucketsModal buckets={buckets} onClose={() => setShowView(false)}
                                        onRename={rename} onDelete={softDelete} />}
-      {showNew && <NewBucketModal onClose={() => setShowNew(false)} onSave={create} />}
+      {showNew && <NewBucketModal onClose={() => setShowNew(false)} onSave={createWithWatchdog} />}
     </div>
   )
 }
