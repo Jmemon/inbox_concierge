@@ -48,9 +48,18 @@ NEAR_MISS_HIGH = 6
 
 
 def _publish(user_id: str, event: str, payload: dict) -> None:
-    """Typed publish — finalised in Task 15. All publishers go through here."""
+    """Typed publish — finalised in Task 15. All publishers go through here.
+
+    Logs the redis subscriber count returned by `publish` so operations can
+    diagnose delivery failures: subscribers=0 means no SSE-side dispatcher
+    was listening on this user's channel at publish time (e.g. due to
+    subscribe/unsubscribe churn during SSE flapping). The published frame
+    is silently dropped by redis when nobody is subscribed.
+    """
     body = json.dumps({"event": event, **payload})
-    _redis_client.get_redis().publish(f"user:{user_id}", body)
+    n = _redis_client.get_redis().publish(f"user:{user_id}", body)
+    log.info("publish: user=%s event=%s subscribers=%d bytes=%d",
+             user_id, event, n, len(body))
 
 
 def _publish_thread_ids(user_id: str, thread_ids: list[str]) -> None:
@@ -274,9 +283,11 @@ def extend_inbox_history_task(user_id: str, before_internal_date_ms: int) -> Non
         user = db.get(User, user_id)
         if user is None:
             return
+        log.info("extend_task: user=%s starting before_ms=%d", user_id, before_internal_date_ms)
         ids, more = gmail_sync.extend_inbox_history(
             db, user=user, before_internal_date_ms=before_internal_date_ms,
         )
+        log.info("extend_task: user=%s upserted %d ids, more=%s; publishing", user_id, len(ids), more)
         _publish(user_id, "extend_complete", {"thread_ids": ids, "more": more})
     finally:
         db.close()

@@ -165,10 +165,19 @@ def partial_sync_inbox(
 
     # Parse all touched threads first, then classify in one batch call, then upsert.
     # This lets classify() parallelize LLM calls across all threads in a single gather().
+    # Per-thread try/except tolerates 404s on threads that were deleted between when
+    # Gmail emitted the history record and when we fetch them — without it the whole
+    # task crashes and the history cursor never advances past the deleted thread,
+    # causing an infinite 30s retry loop on the next beat. Matches the pattern in
+    # extend_inbox_history below.
     parsed_list: list[ParsedThread] = []
     for tid in touched_gmail_ids:
         log.info("partial_sync_inbox: fetching thread %s for user=%s", tid, user.id)
-        thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
+        try:
+            thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
+        except Exception:
+            log.exception("partial_sync_inbox: threads.get failed for %s; skipping", tid)
+            continue
         parsed_list.append(assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or []))
 
     bucket_ids = _classify_batch(db, user_id=user.id, parsed_list=parsed_list)

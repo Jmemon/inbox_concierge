@@ -33,6 +33,20 @@ export function useInbox(opts: {
   // ids (length unchanged → guard locked). Re-arms naturally when new ids land
   // because length grows past the stored value.
   const lastExtendAtLength = useRef<number | null>(null)
+  // Watchdog timer for in-flight extends. If the SSE extend_complete event
+  // doesn't arrive within EXTEND_TIMEOUT_MS, force-reset extendInFlight so
+  // the UI doesn't sit on "loading more…" forever. Failure modes that this
+  // recovers from include redis pubsub messages dropped during SSE flapping
+  // and any other delivery-side issue.
+  const extendWatchdog = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const EXTEND_TIMEOUT_MS = 90_000
+
+  const clearExtendWatchdog = useCallback(() => {
+    if (extendWatchdog.current) {
+      clearTimeout(extendWatchdog.current)
+      extendWatchdog.current = null
+    }
+  }, [])
 
   // Shared helper: pulls the canonical top-N inbox view from the server and
   // overwrites idLayer + displayLayer. Used by both the kickoff snapshot
@@ -96,11 +110,12 @@ export function useInbox(opts: {
   useEffect(() => {
     return subscribeSse((e) => {
       if (e.event !== 'extend_complete') return
+      clearExtendWatchdog()
       setMore(e.more)
       setExtendInFlight(false)
       void applyThreadUpdates(e.thread_ids)
     })
-  }, [applyThreadUpdates])
+  }, [applyThreadUpdates, clearExtendWatchdog])
 
   const requestExtend = useCallback(async () => {
     if (extendInFlight || more === false) return
@@ -113,9 +128,24 @@ export function useInbox(opts: {
     }
     if (smallest === Number.MAX_SAFE_INTEGER) return
     setExtendInFlight(true)
-    try { await postInboxExtend(smallest) }
-    catch { setExtendInFlight(false) }
-  }, [extendInFlight, more, idLayer, displayLayer])
+    // Watchdog: if extend_complete doesn't arrive within the timeout, force-
+    // reset the in-flight flag and clear the no-progress guard so the user
+    // can re-trigger by paginating. We don't auto-retry — that would mask
+    // the server-side bug.
+    clearExtendWatchdog()
+    extendWatchdog.current = setTimeout(() => {
+      console.warn('[useInbox] extend timed out without SSE event; resetting flag')
+      setExtendInFlight(false)
+      lastExtendAtLength.current = null
+      extendWatchdog.current = null
+    }, EXTEND_TIMEOUT_MS)
+    try {
+      await postInboxExtend(smallest)
+    } catch {
+      clearExtendWatchdog()
+      setExtendInFlight(false)
+    }
+  }, [extendInFlight, more, idLayer, displayLayer, clearExtendWatchdog])
 
   // Filtered id layer: walk idLayer in order, keep only ids whose displayLayer
   // row's resolved bucket key matches the active filter set.
