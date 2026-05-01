@@ -20,6 +20,13 @@ def upsert_thread(
     subject: str | None,
     bucket_id: str | None,
 ) -> InboxThread:
+    """Upsert one thread row by (user_id, gmail_thread_id).
+
+    Concurrent inserts of the same (user_id, gmail_thread_id) will raise
+    sqlalchemy.exc.IntegrityError on the second write — the unique constraint
+    catches the SELECT-then-INSERT race. Worker tasks (workers/tasks.py) handle
+    that by letting Celery retry the entire task; this module never catches.
+    """
     stmt = select(InboxThread).where(
         InboxThread.user_id == user_id,
         InboxThread.gmail_id == gmail_thread_id,
@@ -90,12 +97,16 @@ def upsert_message(
         existing.from_addr = from_addr
         existing.body_preview = body_preview
 
-    # Recompute recent_message_id from the max gmail_internal_date in the thread.
-    msgs = db.execute(
-        select(InboxMessage).where(InboxMessage.thread_id == thread.id)
-    ).scalars().all()
-    if msgs:
-        thread.recent_message_id = max(msgs, key=lambda m: m.gmail_internal_date).id
+    # Use a single indexed lookup instead of loading all thread messages.
+    # inbox_messages.gmail_internal_date is indexed, so ORDER BY + LIMIT 1 is O(log N).
+    most_recent_id = db.execute(
+        select(InboxMessage.id)
+        .where(InboxMessage.thread_id == thread.id)
+        .order_by(InboxMessage.gmail_internal_date.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if most_recent_id is not None:
+        thread.recent_message_id = most_recent_id
 
     return existing
 
@@ -146,8 +157,16 @@ def get_threads_batch(
     return list(db.execute(stmt).scalars().all())
 
 
-def get_message(db: Session, *, message_id: str) -> InboxMessage | None:
-    return db.get(InboxMessage, message_id)
+def get_message(db: Session, *, user_id: str, message_id: str) -> InboxMessage | None:
+    """Fetch one message scoped to a user. Returns None if no such message
+    exists OR if the message belongs to a different user — callers are NOT
+    told which case occurred (no enumeration via 404 vs 403 split)."""
+    return db.execute(
+        select(InboxMessage).where(
+            InboxMessage.id == message_id,
+            InboxMessage.user_id == user_id,
+        )
+    ).scalar_one_or_none()
 
 
 def update_user_history_id(db: Session, *, user_id: str, history_id: str) -> None:

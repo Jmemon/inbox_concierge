@@ -1,10 +1,9 @@
 from datetime import datetime, timezone
-from app.db.models import Base, User
+from app.db.models import User
 from app.services import inbox_repo
 
 
 def _seed_user(db, uid="u1"):
-    Base.metadata.create_all(db.get_bind())
     db.add(User(id=uid, email=f"{uid}@x.com", created_at=datetime.now(timezone.utc)))
     db.commit()
 
@@ -40,7 +39,7 @@ def test_upsert_message_updates_recent_message_pointer(db):
     )
     db.commit()
     [t] = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
-    recent = inbox_repo.get_message(db, message_id=t.recent_message_id)
+    recent = inbox_repo.get_message(db, user_id="u1", message_id=t.recent_message_id)
     assert recent.body_preview == "second"
 
 
@@ -56,3 +55,31 @@ def test_list_threads_orders_by_recent_message_internal_date_desc(db):
     db.commit()
     threads = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
     assert [t.gmail_id for t in threads] == ["gT0", "gT2", "gT1"]
+
+
+def test_upsert_thread_update_path_overwrites_subject_and_bucket(db):
+    """Calling upsert_thread twice with the same (user_id, gmail_thread_id)
+    must update the existing row, not create a duplicate."""
+    _seed_user(db)
+    inbox_repo.upsert_thread(db, user_id="u1", gmail_thread_id="gT", subject="first", bucket_id=None)
+    inbox_repo.upsert_thread(db, user_id="u1", gmail_thread_id="gT", subject="second", bucket_id="default-important")
+    db.commit()
+
+    threads = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
+    assert len(threads) == 1
+    assert threads[0].subject == "second"
+    assert threads[0].bucket_id == "default-important"
+
+
+def test_upsert_thread_update_with_none_preserves_existing_values(db):
+    """Passing subject=None or bucket_id=None on the update path means 'leave it
+    alone' — important so the worker can call upsert_thread with subject from a
+    thread fetch that hasn't loaded headers yet."""
+    _seed_user(db)
+    inbox_repo.upsert_thread(db, user_id="u1", gmail_thread_id="gT", subject="set", bucket_id="default-important")
+    inbox_repo.upsert_thread(db, user_id="u1", gmail_thread_id="gT", subject=None, bucket_id=None)
+    db.commit()
+
+    threads = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
+    assert threads[0].subject == "set"
+    assert threads[0].bucket_id == "default-important"
