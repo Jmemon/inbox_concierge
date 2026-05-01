@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     google_client_secret: str = Field(alias="GOOGLE_CLIENT_SECRET")
     google_redirect_uri: str = Field(alias="GOOGLE_REDIRECT_URI")
     cookie_domain: str | None = Field(default=None, alias="COOKIE_DOMAIN")
+    # --- Anthropic (LLM classifier + draft preview) ---
+    # Set ANTHROPIC_API_KEY in Railway dashboard before the deploy that ships
+    # bucket changes — workers boot fine without it but every classify/preview
+    # call returns 401 and falls through to "no fit".
+    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    anthropic_classify_model: str = Field(default="claude-haiku-4-5", alias="ANTHROPIC_CLASSIFY_MODEL")
+    # Process-wide cap on concurrent in-flight Anthropic calls. One semaphore is
+    # shared by classification + draft-preview, so a 200-thread full sync and a
+    # user-triggered preview can't both push 16 concurrently.
+    anthropic_concurrency: int = Field(default=16, alias="ANTHROPIC_CONCURRENCY")
     # On Railway, ENV is "production"; locally unset → development.
     env: str = Field(default="development", alias="ENV")
 

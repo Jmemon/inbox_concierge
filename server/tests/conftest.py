@@ -9,6 +9,7 @@ os.environ["GOOGLE_CLIENT_ID"] = "test-client-id.apps.googleusercontent.com"
 os.environ["GOOGLE_CLIENT_SECRET"] = "test-client-secret"
 os.environ["GOOGLE_REDIRECT_URI"] = "http://testserver/auth/callback"
 os.environ["ENV"] = "development"
+os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"  # never used; tests mock call_messages
 
 import pytest
 from sqlalchemy import create_engine
