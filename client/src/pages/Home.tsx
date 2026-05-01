@@ -12,7 +12,7 @@ import { NewBucketModal } from './buckets/NewBucketModal'
 
 export default function Home() {
   const { state, signOut } = useAuth()
-  const { buckets, rename, softDelete } = useBuckets()
+  const { buckets, byId: bucketsById, rename, softDelete } = useBuckets()
   const [filterSelection, setFilterSelection] = useState<Set<string> | null>(null)
   const [showView, setShowView] = useState(false)
   const [showNew, setShowNew] = useState(false)
@@ -51,7 +51,7 @@ export default function Home() {
       <main>
         {inbox.error && <div style={{ color: '#8a1c25', padding: 16 }}>error: {inbox.error}</div>}
         {!inbox.error && inbox.loading && <div style={{ padding: 24 }}>loading…</div>}
-        {!inbox.loading && <InboxList threads={inbox.pageThreads} />}
+        {!inbox.loading && <InboxList threads={inbox.pageThreads} bucketsById={bucketsById} />}
         <Pagination page={inbox.page} pageCount={inbox.pageCount} onChange={inbox.setPage} />
         {inbox.more === false && (
           <div style={{ padding: 12, fontSize: 12, color: '#888', textAlign: 'center' }}>
