@@ -27,6 +27,7 @@ ACTIVE_USERS_TTL_SECONDS = 60
 async def sse(request: Request, user: User = Depends(get_current_user)):
     queue: asyncio.Queue[str] = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
     is_first = sse_connections.add(user.id, queue)
+    log.info("sse: connection opened user=%s is_first=%s", user.id, is_first)
 
     if is_first:
         await pubsub.subscribe(user.id)
@@ -34,8 +35,10 @@ async def sse(request: Request, user: User = Depends(get_current_user)):
 
     # Kickoff sync immediately so first inbox fetch sees fresh data.
     if user.gmail_last_history_id:
+        log.info("sse: kickoff → poll_new_messages (has history cursor) user=%s", user.id)
         tasks.poll_new_messages.apply_async(args=[user.id], countdown=0)
     else:
+        log.info("sse: kickoff → full_sync_inbox_task (no history cursor) user=%s", user.id)
         tasks.full_sync_inbox_task.apply_async(args=[user.id], countdown=0)
 
     user_id = user.id  # capture before user goes out of scope across awaits
@@ -52,6 +55,7 @@ async def sse(request: Request, user: User = Depends(get_current_user)):
                 try:
                     msg = await asyncio.wait_for(queue.get(), timeout=1.0)
                     elapsed = 0.0
+                    log.info("sse: dispatching event user=%s len=%d", user_id, len(msg))
                     yield f"data: {msg}\n\n"
                 except asyncio.TimeoutError:
                     elapsed += 1.0
@@ -59,9 +63,11 @@ async def sse(request: Request, user: User = Depends(get_current_user)):
                         elapsed = 0.0
                         # keepalive frame + active-users TTL refresh
                         active_users.refresh(user_id, ttl_seconds=ACTIVE_USERS_TTL_SECONDS)
+                        log.debug("sse: heartbeat user=%s", user_id)
                         yield ": keepalive\n\n"
         finally:
             was_last = sse_connections.remove(user_id, queue)
+            log.info("sse: connection closed user=%s was_last=%s", user_id, was_last)
             if was_last:
                 try:
                     await pubsub.unsubscribe(user_id)

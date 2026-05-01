@@ -39,15 +39,22 @@ export function useInboxSse(opts: {
       ready.current = false
 
       try {
+        console.log('[useInboxSse] opening SSE')
         handle = openInboxStream(
           (ev) => {
-            if (!ready.current) buffer.current.push(ev)
-            else void opts.onApply(ev.thread_ids)
+            if (!ready.current) {
+              console.log('[useInboxSse] buffering event (snapshot not done yet) thread_ids.length=', ev.thread_ids.length)
+              buffer.current.push(ev)
+            } else {
+              console.log('[useInboxSse] live event applying thread_ids.length=', ev.thread_ids.length)
+              void opts.onApply(ev.thread_ids)
+            }
           },
           () => {
             // Connection blip. Close our handle and re-run the lifecycle.
             // The browser's own EventSource retry is bypassed in favor of
             // our own so each new connection pairs with snapshot+replay.
+            console.warn('[useInboxSse] onerror — closing and rescheduling')
             if (cancelled) return
             handle?.close()
             handle = null
@@ -58,16 +65,20 @@ export function useInboxSse(opts: {
           },
         )
 
+        console.log('[useInboxSse] snapshot starting')
         await opts.snapshot()
+        console.log('[useInboxSse] snapshot done')
         if (cancelled) return
 
         const flushed = buffer.current
         buffer.current = []
         ready.current = true
+        console.log('[useInboxSse] buffer flushing', flushed.length, 'events')
         for (const ev of flushed) {
           if (cancelled) return
           await opts.onApply(ev.thread_ids)
         }
+        console.log('[useInboxSse] now applying live')
       } finally {
         // cycling stays true while ready=true; reset only happens via the
         // onerror path above (which already toggles it before re-scheduling).
@@ -77,6 +88,7 @@ export function useInboxSse(opts: {
     void lifecycle()
 
     return () => {
+      console.log('[useInboxSse] cleanup — closing handle')
       cancelled = true
       handle?.close()
       handle = null

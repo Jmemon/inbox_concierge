@@ -8,8 +8,16 @@ three roles, one instance").
 the test transaction; production runs against a real worker.
 """
 
+import logging
 import os
 from celery import Celery
+
+# Configure logging for the worker and beat processes. Each is a separate
+# Python process that doesn't inherit the FastAPI main.py basicConfig call.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 from app.config import get_settings
 
 

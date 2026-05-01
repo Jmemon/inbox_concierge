@@ -16,6 +16,7 @@ The client doesn't need a separate response shape: the existing SSE pipeline
 will deliver any updated thread ids exactly the same way as a beat-driven poll.
 """
 
+import logging
 import time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -29,6 +30,7 @@ from app.workers import tasks
 
 
 router = APIRouter(prefix="/api", tags=["inbox"])
+log = logging.getLogger(__name__)
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
@@ -76,13 +78,16 @@ def list_inbox(
     limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     page: int = Query(default=1, ge=1),
 ) -> dict:
+    log.info("list_inbox: user=%s page=%d limit=%d", user.id, page, limit)
     offset = (page - 1) * limit
     threads = inbox_repo.list_threads(db, user_id=user.id, limit=limit, offset=offset)
+    serialized = [_serialize_thread(db, user.id, t) for t in threads]
+    log.info("list_inbox: user=%s → %d threads returned", user.id, len(serialized))
     return {
         "as_of": int(time.time() * 1000),  # ms-precision server timestamp
         "page": page,
         "limit": limit,
-        "threads": [_serialize_thread(db, user.id, t) for t in threads],
+        "threads": serialized,
     }
 
 
@@ -92,9 +97,12 @@ def get_thread(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    log.info("get_thread: user=%s thread_id=%s", user.id, thread_id)
     t = inbox_repo.get_thread(db, user_id=user.id, thread_id=thread_id)
     if t is None:
+        log.info("get_thread: user=%s thread_id=%s → 404", user.id, thread_id)
         raise HTTPException(status_code=404, detail="not found")
+    log.info("get_thread: user=%s thread_id=%s → found", user.id, thread_id)
     return _serialize_thread(db, user.id, t)
 
 
@@ -111,12 +119,15 @@ def batch_get_threads(
     response only includes threads the requester owns. The SSE replay path
     relies on this so a stale buffered event doesn't 404 the whole batch.
     """
+    log.info("batch_get_threads: user=%s requested=%d ids", user.id, len(body.thread_ids))
     if len(body.thread_ids) > MAX_BATCH_IDS:
         raise HTTPException(status_code=400, detail=f"too many ids (max {MAX_BATCH_IDS})")
     threads = inbox_repo.get_threads_batch(
         db, user_id=user.id, thread_ids=body.thread_ids,
     )
-    return {"threads": [_serialize_thread(db, user.id, t) for t in threads]}
+    serialized = [_serialize_thread(db, user.id, t) for t in threads]
+    log.info("batch_get_threads: user=%s → %d threads returned", user.id, len(serialized))
+    return {"threads": serialized}
 
 
 @router.post("/inbox/refresh", status_code=202)
@@ -128,7 +139,9 @@ def trigger_refresh(user: User = Depends(get_current_user)) -> JSONResponse:
     a beat-driven poll would.
     """
     if user.gmail_last_history_id:
+        log.info("trigger_refresh: user=%s → enqueuing poll_new_messages (partial)", user.id)
         tasks.poll_new_messages.apply_async(args=[user.id], countdown=0)
     else:
+        log.info("trigger_refresh: user=%s → enqueuing full_sync_inbox_task (no history cursor)", user.id)
         tasks.full_sync_inbox_task.apply_async(args=[user.id], countdown=0)
     return JSONResponse({"ok": True}, status_code=202)

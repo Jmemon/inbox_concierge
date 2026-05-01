@@ -31,15 +31,19 @@ log = logging.getLogger(__name__)
 def _publish_thread_ids(user_id: str, thread_ids: list[str]) -> None:
     if not thread_ids:
         return
+    channel = f"user:{user_id}"
+    log.info("_publish_thread_ids: channel=%s count=%d", channel, len(thread_ids))
     payload = json.dumps({"thread_ids": thread_ids})
-    _redis_client.get_redis().publish(f"user:{user_id}", payload)
+    _redis_client.get_redis().publish(channel, payload)
 
 
 @celery_app.task(name="app.workers.tasks.enqueue_polls")
 def enqueue_polls() -> None:
     """Beat fan-out: purge expired entries, then enqueue one poll per active user."""
     active_users.purge_expired()
-    for uid in active_users.list_active():
+    active = list(active_users.list_active())
+    log.info("enqueue_polls: found %d active users: %s", len(active), active)
+    for uid in active:
         # Random 0-10s spread happens at apply_async time. Use a fixed countdown of
         # 0 here for determinism in tests; production beat schedule could randomize.
         poll_new_messages.apply_async(args=[uid], countdown=0)
@@ -57,6 +61,7 @@ def poll_new_messages(user_id: str) -> None:
         - records → partial_sync_inbox(history_records, new_history_id).
      3. Publish touched thread ids on user:{user_id}.
     """
+    log.info("poll_new_messages: start user=%s", user_id)
     db = SessionLocal()
     try:
         user = db.get(User, user_id)
@@ -65,7 +70,9 @@ def poll_new_messages(user_id: str) -> None:
             return
 
         if not user.gmail_last_history_id:
+            log.info("poll_new_messages: user=%s has no history cursor → full sync", user_id)
             ids = gmail_sync.full_sync_inbox(db, user=user)
+            log.info("poll_new_messages: user=%s full sync complete, publishing %d ids", user_id, len(ids))
             _publish_thread_ids(user_id, ids)
             return
 
@@ -75,19 +82,23 @@ def poll_new_messages(user_id: str) -> None:
                 gmail, start_history_id=user.gmail_last_history_id,
             )
         except gmail_sync.HistoryGoneError:
-            log.info("history 404 for %s; falling back to full sync", user_id)
+            log.info("poll_new_messages: history 404 for %s; falling back to full sync", user_id)
             ids = gmail_sync.full_sync_inbox(db, user=user)
+            log.info("poll_new_messages: user=%s recovery full sync complete, publishing %d ids", user_id, len(ids))
             _publish_thread_ids(user_id, ids)
             return
 
         if not history_records:
+            log.info("poll_new_messages: user=%s history returned 0 records → no publish", user_id)
             return  # silent: no new changes
 
+        log.info("poll_new_messages: user=%s got %d history records → partial sync", user_id, len(history_records))
         ids = gmail_sync.partial_sync_inbox(
             db, user=user,
             history_records=history_records,
             new_history_id=new_history_id,
         )
+        log.info("poll_new_messages: user=%s partial sync complete, publishing %d ids", user_id, len(ids))
         _publish_thread_ids(user_id, ids)
     finally:
         db.close()
@@ -97,6 +108,7 @@ def poll_new_messages(user_id: str) -> None:
 def full_sync_inbox_task(user_id: str) -> None:
     """Explicit full-sync entry point. Used by the SSE-on-connect kickoff and
     by POST /api/inbox/refresh when the user has no history cursor."""
+    log.info("full_sync_inbox_task: start user=%s", user_id)
     db = SessionLocal()
     try:
         user = db.get(User, user_id)
@@ -104,6 +116,7 @@ def full_sync_inbox_task(user_id: str) -> None:
             log.warning("full_sync_inbox_task: user %s not found", user_id)
             return
         ids = gmail_sync.full_sync_inbox(db, user=user)
+        log.info("full_sync_inbox_task: user=%s complete, publishing %d ids", user_id, len(ids))
         _publish_thread_ids(user_id, ids)
     finally:
         db.close()

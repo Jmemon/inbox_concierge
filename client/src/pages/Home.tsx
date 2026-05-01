@@ -10,6 +10,19 @@ export default function Home() {
   const { state, signOut } = useAuth()
   const inbox = useInbox()
 
+  // Single render-time log capturing the most diagnostic state. Makes it
+  // immediately clear in DevTools whether snapshot returned 0 threads (suspect)
+  // vs whether the SSE event arrived but the merge didn't apply.
+  console.log('[Home] render', {
+    loading: inbox.loading,
+    error: inbox.error,
+    page: inbox.page,
+    pageCount: inbox.pageCount,
+    idLayerLen: inbox.idLayer.length,
+    displayLayerLen: Object.keys(inbox.displayLayer).length,
+    pageThreadsLen: inbox.pageThreads.length,
+  })
+
   useInboxSse({
     onApply: inbox.applyThreadUpdates,
     snapshot: inbox.snapshot,

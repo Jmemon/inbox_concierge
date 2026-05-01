@@ -13,12 +13,14 @@ export function ReloadButton() {
 
   async function onClick() {
     if (busy) return
+    console.log('[ReloadButton] click fired')
     setBusy(true)
     try {
       await requestRefresh()
-    } catch {
+      console.log('[ReloadButton] requestRefresh → 202 ok')
+    } catch (e) {
       // surface as a console error; don't block the UI
-      console.error('reload failed')
+      console.error('[ReloadButton] requestRefresh failed', e)
     } finally {
       setTimeout(() => setBusy(false), 1500)
     }

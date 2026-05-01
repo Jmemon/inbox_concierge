@@ -34,10 +34,12 @@ export function useInbox(): UseInbox {
   const lastInternalDate = useRef<Record<string, number>>({})
 
   const snapshot = useCallback(async () => {
+    console.log('[useInbox] snapshot starting')
     setLoading(true)
     setError(null)
     try {
       const resp = await getInbox({ limit: SNAPSHOT_LIMIT })
+      console.log('[useInbox] snapshot result: thread count=', resp.threads.length, 'as_of=', resp.as_of)
       const order: string[] = []
       const display: DisplayLayer = {}
       for (const t of resp.threads) {
@@ -49,6 +51,7 @@ export function useInbox(): UseInbox {
       setDisplayLayer(display)
       setAsOf(resp.as_of)
     } catch (e: any) {
+      console.error('[useInbox] snapshot error', e)
       setError(String(e?.kind ?? e?.message ?? e))
     } finally {
       setLoading(false)
@@ -56,6 +59,7 @@ export function useInbox(): UseInbox {
   }, [])
 
   const applyThreadUpdates = useCallback(async (ids: string[]) => {
+    console.log('[useInbox] applyThreadUpdates entry id count=', ids.length)
     if (ids.length === 0) return
     let fetched: InboxThread[] = []
     try {
@@ -63,7 +67,7 @@ export function useInbox(): UseInbox {
     } catch (e) {
       // A failed batch is non-fatal: keep current state, surface to console.
       // The next SSE event or reload will re-attempt.
-      console.error('batch fetch failed', e)
+      console.error('[useInbox] batch fetch failed', e)
       return
     }
 
@@ -72,14 +76,18 @@ export function useInbox(): UseInbox {
     // ernalDate ref is mutated exactly once per call, not once per strict-mode
     // re-run of the updater.
     const accepted: InboxThread[] = []
+    const dropped: InboxThread[] = []
     for (const t of fetched) {
       const incoming = t.recent_message?.internal_date ?? 0
       const have = lastInternalDate.current[t.id] ?? 0
       if (incoming >= have) {
         accepted.push(t)
         if (t.recent_message) lastInternalDate.current[t.id] = incoming
+      } else {
+        dropped.push(t)
       }
     }
+    console.log('[useInbox] applyThreadUpdates accepted=', accepted.length, 'dropped (out-of-order)=', dropped.length)
     if (accepted.length === 0) return
 
     setDisplayLayer((prev) => {
@@ -98,6 +106,7 @@ export function useInbox(): UseInbox {
         const db = lastInternalDate.current[b] ?? 0
         return db - da
       })
+      console.log('[useInbox] applyThreadUpdates new idLayer length=', arr.length)
       return arr
     })
   }, [])
@@ -106,6 +115,7 @@ export function useInbox(): UseInbox {
     const start = (page - 1) * PAGE_SIZE
     const ids = idLayer.slice(start, start + PAGE_SIZE)
     const missing = ids.filter((id) => !(id in displayLayer))
+    console.log('[useInbox] hydrateCurrentPage page=', page, 'missing=', missing.length)
     if (missing.length === 0) return
     await applyThreadUpdates(missing)
   }, [page, idLayer, displayLayer, applyThreadUpdates])

@@ -37,6 +37,7 @@ class PubSubDispatcher:
             if self._task is not None:
                 return
             self._task = asyncio.create_task(self._run(), name="pubsub-dispatcher")
+            log.info("pubsub: dispatcher task created")
 
     async def stop(self) -> None:
         async with self._lock:
@@ -59,29 +60,40 @@ class PubSubDispatcher:
         if self._pubsub is None:
             # Access via module attribute so monkeypatches on the module take effect.
             self._pubsub = redis_client_module.get_async_redis().pubsub()
-        await self._pubsub.subscribe(f"user:{user_id}")
+        channel = f"user:{user_id}"
+        log.info("pubsub: subscribing to channel %s", channel)
+        await self._pubsub.subscribe(channel)
         self._has_subscription.set()
 
     async def unsubscribe(self, user_id: str) -> None:
         if self._pubsub is None:
             return
-        await self._pubsub.unsubscribe(f"user:{user_id}")
+        channel = f"user:{user_id}"
+        log.info("pubsub: unsubscribing from channel %s", channel)
+        await self._pubsub.unsubscribe(channel)
 
     async def _run(self) -> None:
         # Wait until at least one channel is subscribed before touching the network.
+        log.info("pubsub: dispatcher waiting on first subscription")
         await self._has_subscription.wait()
+        log.info("pubsub: dispatcher entering listen loop")
         assert self._pubsub is not None
         try:
             async for raw in self._pubsub.listen():
                 # Skip subscribe/unsubscribe confirmation frames; only process real messages.
-                if raw is None or raw.get("type") != "message":
+                msg_type = raw.get("type") if raw else None
+                if raw is None or msg_type != "message":
+                    log.debug("pubsub: skipping frame type=%s", msg_type)
                     continue
                 channel = raw.get("channel", "")
                 if not channel.startswith("user:"):
+                    log.debug("pubsub: skipping non-user channel=%s", channel)
                     continue
                 user_id = channel[len("user:"):]
                 data = raw.get("data")
-                for queue in sse_connections.iter_queues(user_id):
+                queues = list(sse_connections.iter_queues(user_id))
+                log.info("pubsub: message on channel=%s type=%s routed to %d queues", channel, msg_type, len(queues))
+                for queue in queues:
                     try:
                         # Use put_nowait so a slow consumer can't block the dispatcher loop.
                         queue.put_nowait(data)

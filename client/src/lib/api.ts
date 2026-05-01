@@ -1,15 +1,33 @@
 export type AuthError = 'unauthorized' | 'network'
 
+// Generic JSON fetch with timing and logging so every API call is visible in DevTools.
 export async function getJSON<T>(url: string): Promise<T> {
+  const t0 = performance.now()
+  console.log('[api] GET', url)
   const r = await fetch(url, { credentials: 'same-origin' })
-  if (r.status === 401) throw { kind: 'unauthorized' as const }
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  const ms = Math.round(performance.now() - t0)
+  if (r.status === 401) {
+    console.error('[api] GET', url, '→ 401 unauthorized', ms, 'ms')
+    throw { kind: 'unauthorized' as const }
+  }
+  if (!r.ok) {
+    console.error('[api] GET', url, '→', r.status, r.statusText, ms, 'ms')
+    throw new Error(`${r.status} ${r.statusText}`)
+  }
+  console.log('[api] GET', url, '→', r.status, ms, 'ms')
   return (await r.json()) as T
 }
 
 export async function postEmpty(url: string): Promise<void> {
+  const t0 = performance.now()
+  console.log('[api] POST', url)
   const r = await fetch(url, { method: 'POST', credentials: 'same-origin' })
-  if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${r.statusText}`)
+  const ms = Math.round(performance.now() - t0)
+  if (!r.ok && r.status !== 204) {
+    console.error('[api] POST', url, '→', r.status, r.statusText, ms, 'ms')
+    throw new Error(`${r.status} ${r.statusText}`)
+  }
+  console.log('[api] POST', url, '→', r.status, ms, 'ms')
 }
 
 // --- Inbox types ---
@@ -43,11 +61,29 @@ export function getInbox(opts: { page?: number; limit?: number } = {}): Promise<
   if (opts.page) params.set('page', String(opts.page))
   if (opts.limit) params.set('limit', String(opts.limit))
   const qs = params.toString()
-  return getJSON<InboxPage>(`/api/inbox${qs ? `?${qs}` : ''}`)
+  const url = `/api/inbox${qs ? `?${qs}` : ''}`
+  const t0 = performance.now()
+  console.log('[api] getInbox', opts)
+  return getJSON<InboxPage>(url).then((r) => {
+    console.log('[api] getInbox →', r.threads.length, 'threads in', Math.round(performance.now() - t0), 'ms')
+    return r
+  }).catch((e) => {
+    console.error('[api] getInbox failed', e)
+    throw e
+  })
 }
 
 export function getThread(id: string): Promise<InboxThread> {
-  return getJSON<InboxThread>(`/api/threads/${encodeURIComponent(id)}`)
+  const url = `/api/threads/${encodeURIComponent(id)}`
+  const t0 = performance.now()
+  console.log('[api] getThread', id)
+  return getJSON<InboxThread>(url).then((r) => {
+    console.log('[api] getThread', id, '→ found in', Math.round(performance.now() - t0), 'ms')
+    return r
+  }).catch((e) => {
+    console.error('[api] getThread', id, 'failed', e)
+    throw e
+  })
 }
 
 export async function getThreadsBatch(thread_ids: string[]): Promise<InboxThread[]> {
@@ -55,21 +91,36 @@ export async function getThreadsBatch(thread_ids: string[]): Promise<InboxThread
   // can carry up to ~200 thread ids on a kickoff full sync, and N parallel
   // GET /api/threads/{id} calls would create avoidable connection churn.
   if (thread_ids.length === 0) return []
+  const t0 = performance.now()
+  console.log('[api] getThreadsBatch requested', thread_ids.length, 'ids')
   const r = await fetch('/api/threads/batch', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ thread_ids }),
   })
-  if (r.status === 401) throw { kind: 'unauthorized' as const }
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  const ms = Math.round(performance.now() - t0)
+  if (r.status === 401) {
+    console.error('[api] getThreadsBatch → 401 unauthorized', ms, 'ms')
+    throw { kind: 'unauthorized' as const }
+  }
+  if (!r.ok) {
+    console.error('[api] getThreadsBatch → ', r.status, r.statusText, ms, 'ms')
+    throw new Error(`${r.status} ${r.statusText}`)
+  }
   const body = (await r.json()) as { threads: InboxThread[] }
+  console.log('[api] getThreadsBatch →', body.threads.length, 'threads returned in', ms, 'ms')
   return body.threads
 }
 
 export async function requestRefresh(): Promise<void> {
+  const t0 = performance.now()
+  console.log('[api] requestRefresh POST /api/inbox/refresh')
   const r = await fetch('/api/inbox/refresh', { method: 'POST', credentials: 'same-origin' })
+  const ms = Math.round(performance.now() - t0)
   if (r.status !== 202 && r.status !== 200) {
+    console.error('[api] requestRefresh → ', r.status, ms, 'ms')
     throw new Error(`refresh failed: ${r.status}`)
   }
+  console.log('[api] requestRefresh → 202 in', ms, 'ms')
 }

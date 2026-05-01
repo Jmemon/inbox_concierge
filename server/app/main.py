@@ -1,3 +1,12 @@
+import logging
+
+# Configure logging before any router imports so app-level INFO logs surface
+# in both uvicorn dev and production stderr streams.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request

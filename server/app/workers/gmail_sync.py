@@ -16,6 +16,8 @@ touched. Returning ids only (not full thread payloads) keeps callers — the SSE
 publish path in tasks.py — small: the data is in postgres for the api to read.
 """
 
+import logging
+
 from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -24,6 +26,9 @@ from app.services import inbox_repo
 from app.services.classification import classify
 from app.services.gmail import get_gmail_client
 from app.services.message_parser import assemble_thread, ParsedThread
+
+
+log = logging.getLogger(__name__)
 
 
 class HistoryGoneError(Exception):
@@ -79,6 +84,7 @@ def fetch_history_records(
     Raises HistoryGoneError when gmail returns 404 (the cursor is past the
     retention window). All other HttpErrors propagate.
     """
+    log.info("fetch_history_records: start_history_id=%s", start_history_id)
     try:
         resp = gmail_client.users().history().list(
             userId="me",
@@ -89,7 +95,10 @@ def fetch_history_records(
         if getattr(e.resp, "status", None) == 404:
             raise HistoryGoneError() from e
         raise
-    return resp.get("history", []) or [], resp.get("historyId")
+    history = resp.get("history", []) or []
+    new_history_id = resp.get("historyId")
+    log.info("fetch_history_records: got %d records, new historyId=%s", len(history), new_history_id)
+    return history, new_history_id
 
 
 def partial_sync_inbox(
@@ -109,6 +118,11 @@ def partial_sync_inbox(
     Writes touched threads + their messages to postgres in one transaction.
     Returns the list of gmail_thread_ids that were upserted.
     """
+    records_provided = history_records is not None
+    log.info(
+        "partial_sync_inbox: user=%s records_provided=%s",
+        user.id, records_provided,
+    )
     gmail = get_gmail_client(db, user)
     bucket_ids = _available_bucket_ids(db, user.id)
 
@@ -118,6 +132,7 @@ def partial_sync_inbox(
         )
 
     if not history_records:
+        log.info("partial_sync_inbox: user=%s no history records → returning empty", user.id)
         return []
 
     touched: set[str] = set()
@@ -128,7 +143,9 @@ def partial_sync_inbox(
             if tid:
                 touched.add(tid)
 
+    log.info("partial_sync_inbox: user=%s touched %d thread ids, fetching each", user.id, len(touched))
     for tid in touched:
+        log.info("partial_sync_inbox: fetching thread %s for user=%s", tid, user.id)
         thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
         parsed = assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or [])
         _upsert_thread_with_messages(db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids)
@@ -136,6 +153,7 @@ def partial_sync_inbox(
     if new_history_id:
         inbox_repo.update_user_history_id(db, user_id=user.id, history_id=str(new_history_id))
     db.commit()
+    log.info("partial_sync_inbox: user=%s done, %d threads upserted", user.id, len(touched))
     return list(touched)
 
 
@@ -149,6 +167,7 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
 
     Returns the touched gmail_thread_ids. Commits internally.
     """
+    log.info("full_sync_inbox: start user=%s", user.id)
     gmail = get_gmail_client(db, user)
     bucket_ids = _available_bucket_ids(db, user.id)
 
@@ -158,11 +177,13 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
 
     listing = gmail.users().threads().list(userId="me", maxResults=200).execute()
     thread_stubs = listing.get("threads", []) or []
+    log.info("full_sync_inbox: user=%s listing returned %d thread stubs", user.id, len(thread_stubs))
 
     touched: list[str] = []
     max_history_id: int = 0
     for stub in thread_stubs:
         tid = stub["id"]
+        log.info("full_sync_inbox: fetching thread %s for user=%s", tid, user.id)
         thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
         parsed = assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or [])
         _upsert_thread_with_messages(db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids)
@@ -178,4 +199,5 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
     if max_history_id:
         inbox_repo.update_user_history_id(db, user_id=user.id, history_id=str(max_history_id))
     db.commit()
+    log.info("full_sync_inbox: user=%s done, %d threads touched, max_history_id=%d", user.id, len(touched), max_history_id)
     return touched
