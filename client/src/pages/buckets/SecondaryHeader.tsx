@@ -5,7 +5,7 @@ import { FilterByBucketDropdown } from './FilterByBucketDropdown'
 
 export function SecondaryHeader({
   buckets, filterSelection, onFilterChange, onViewBuckets, onNewBucket,
-  page, pageCount, extending, onPageChange,
+  page, pageCount, extending, onPageChange, onResync,
 }: {
   buckets: Bucket[]
   filterSelection: Set<string> | null
@@ -16,13 +16,14 @@ export function SecondaryHeader({
   pageCount: number
   extending: boolean
   onPageChange: (n: number) => void
+  onResync: () => Promise<void>
 }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
       padding: '8px 24px', borderBottom: '1px solid #eee', background: '#fafafa',
     }}>
-      <ReloadButton />
+      <ReloadButton onResync={onResync} />
       <FilterByBucketDropdown buckets={buckets} selection={filterSelection} onChange={onFilterChange} />
       <button onClick={onViewBuckets} style={{ fontSize: 13, padding: '6px 10px' }}>view buckets</button>
       <button onClick={onNewBucket} style={{ fontSize: 13, padding: '6px 10px' }}>new bucket</button>

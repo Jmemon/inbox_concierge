@@ -47,6 +47,7 @@ export default function Home() {
         onNewBucket={() => setShowNew(true)}
         page={inbox.page} pageCount={inbox.pageCount}
         extending={inbox.extendInFlight} onPageChange={inbox.setPage}
+        onResync={inbox.resync}
       />
 
       <main>

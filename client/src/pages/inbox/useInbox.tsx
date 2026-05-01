@@ -34,20 +34,41 @@ export function useInbox(opts: {
   // because length grows past the stored value.
   const lastExtendAtLength = useRef<number | null>(null)
 
-  const snapshot = useCallback(async () => {
-    setLoading(true); setError(null)
-    try {
-      const r = await getInbox({ limit: SNAPSHOT_LIMIT })
-      const order: string[] = []
-      const display: DisplayLayer = {}
-      for (const t of r.threads) {
-        order.push(t.id); display[t.id] = t
-        if (t.recent_message) lastInternalDate.current[t.id] = t.recent_message.internal_date
-      }
-      setIdLayer(order); setDisplayLayer(display)
-    } catch (e: any) { setError(String(e?.kind ?? e?.message ?? e)) }
-    finally { setLoading(false) }
+  // Shared helper: pulls the canonical top-N inbox view from the server and
+  // overwrites idLayer + displayLayer. Used by both the kickoff snapshot
+  // (which wants the "loading…" placeholder) and the user-triggered reload
+  // (which must NOT blank the list — see resync below).
+  const fetchAndReplace = useCallback(async () => {
+    setError(null)
+    const r = await getInbox({ limit: SNAPSHOT_LIMIT })
+    const order: string[] = []
+    const display: DisplayLayer = {}
+    const nextDates: Record<string, number> = {}
+    for (const t of r.threads) {
+      order.push(t.id); display[t.id] = t
+      if (t.recent_message) nextDates[t.id] = t.recent_message.internal_date
+    }
+    // Reset, don't merge: an out-of-band thread we no longer surface (e.g. moved
+    // out of the latest 200 window) should not keep a stale LWW gate value.
+    lastInternalDate.current = nextDates
+    setIdLayer(order); setDisplayLayer(display)
   }, [])
+
+  const snapshot = useCallback(async () => {
+    setLoading(true)
+    try { await fetchAndReplace() }
+    catch (e: any) { setError(String(e?.kind ?? e?.message ?? e)) }
+    finally { setLoading(false) }
+  }, [fetchAndReplace])
+
+  // Hard resync triggered by the user (reload button). Replaces idLayer +
+  // displayLayer with the canonical server view WITHOUT toggling `loading` —
+  // we don't want the rendered list to flash to "loading…" on every reload.
+  // Errors are logged only; the existing list stays on screen.
+  const resync = useCallback(async () => {
+    try { await fetchAndReplace() }
+    catch (e) { console.error('[useInbox] resync failed', e) }
+  }, [fetchAndReplace])
 
   const applyThreadUpdates = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return
@@ -133,6 +154,13 @@ export function useInbox(opts: {
     void requestExtend()
   }, [page, pageCount, more, extendInFlight, opts.filterSelection, idLayer.length, requestExtend])
 
+  // Page clamp: after a resync collapses idLayer back to the latest 200, a user
+  // who had paginated into extended history (page 5+) would otherwise see an
+  // empty list. Snap them back to the last valid page instead.
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount)
+  }, [page, pageCount])
+
   const hydrateCurrentPage = useCallback(async () => {
     const start = (page - 1) * PAGE_SIZE
     const ids = idLayer.slice(start, start + PAGE_SIZE)
@@ -142,7 +170,7 @@ export function useInbox(opts: {
 
   return {
     loading, error, idLayer, displayLayer, page, pageCount, pageThreads,
-    setPage, snapshot, applyThreadUpdates, hydrateCurrentPage,
+    setPage, snapshot, resync, applyThreadUpdates, hydrateCurrentPage,
     more, requestExtend, extendInFlight,
   }
 }
