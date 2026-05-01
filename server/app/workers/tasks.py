@@ -17,7 +17,7 @@ import json
 import logging
 from app.db.session import SessionLocal as _AppSessionLocal
 from app.db.models import User
-from app.services import active_users
+from app.services import active_users, sync_lock
 from app.services import redis_client as _redis_client
 from app.services.gmail import get_gmail_client
 from app.workers import gmail_sync
@@ -60,8 +60,15 @@ def poll_new_messages(user_id: str) -> None:
         - empty records → return silently.
         - records → partial_sync_inbox(history_records, new_history_id).
      3. Publish touched thread ids on user:{user_id}.
+
+    Holds a per-user redis lock for the duration so a concurrent
+    full_sync_inbox_task or another beat-driven poll can't race on the
+    (user_id, gmail_id) unique constraint and leave the inbox half-synced.
     """
     log.info("poll_new_messages: start user=%s", user_id)
+    if not sync_lock.acquire(user_id):
+        log.info("poll_new_messages: user=%s already syncing, skipping", user_id)
+        return
     db = SessionLocal()
     try:
         user = db.get(User, user_id)
@@ -102,13 +109,22 @@ def poll_new_messages(user_id: str) -> None:
         _publish_thread_ids(user_id, ids)
     finally:
         db.close()
+        sync_lock.release(user_id)
 
 
 @celery_app.task(name="app.workers.tasks.full_sync_inbox")
 def full_sync_inbox_task(user_id: str) -> None:
     """Explicit full-sync entry point. Used by the SSE-on-connect kickoff and
-    by POST /api/inbox/refresh when the user has no history cursor."""
+    by POST /api/inbox/refresh when the user has no history cursor.
+
+    Holds the same per-user lock poll_new_messages uses, so the SSE kickoff
+    and a concurrent beat-driven poll can't both try to fan out 200 inserts
+    against the unique constraint at the same time.
+    """
     log.info("full_sync_inbox_task: start user=%s", user_id)
+    if not sync_lock.acquire(user_id):
+        log.info("full_sync_inbox_task: user=%s already syncing, skipping", user_id)
+        return
     db = SessionLocal()
     try:
         user = db.get(User, user_id)
@@ -120,3 +136,4 @@ def full_sync_inbox_task(user_id: str) -> None:
         _publish_thread_ids(user_id, ids)
     finally:
         db.close()
+        sync_lock.release(user_id)
