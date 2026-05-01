@@ -46,16 +46,22 @@ def _available_bucket_ids(db: Session, user_id: str) -> list[str]:
 
 def _upsert_thread_with_messages(
     db: Session, *, user_id: str, parsed: ParsedThread, bucket_ids: list[str]
-) -> None:
+) -> str:
     """Classify the thread, then write it and all its messages to postgres.
 
     Caller is responsible for the surrounding transaction (db.commit happens
     in partial_sync_inbox / full_sync_inbox).
+
+    Returns the internal InboxThread.id (UUID hex). This is the id the api +
+    client use everywhere to identify a thread; the worker returns it so the
+    SSE publish path can carry the same identifier — sending gmail_thread_id
+    instead would make /api/threads/batch (which filters by InboxThread.id)
+    return zero rows.
     """
     # Skip classification when no buckets exist yet (e.g. fresh test DB or
     # first-time user before default buckets are seeded). bucket_id is nullable.
     bucket_id = classify(parsed, bucket_ids) if bucket_ids else None
-    inbox_repo.upsert_thread(
+    thread = inbox_repo.upsert_thread(
         db,
         user_id=user_id,
         gmail_thread_id=parsed.gmail_thread_id,
@@ -74,6 +80,7 @@ def _upsert_thread_with_messages(
             from_addr=m.from_addr,
             body_preview=m.body_preview,
         )
+    return thread.id
 
 
 def fetch_history_records(
@@ -116,7 +123,9 @@ def partial_sync_inbox(
     avoid a redundant API call.
 
     Writes touched threads + their messages to postgres in one transaction.
-    Returns the list of gmail_thread_ids that were upserted.
+    Returns the list of internal InboxThread.id values (UUID hex) that were
+    upserted — NOT gmail_thread_ids. The SSE publish path forwards these to
+    /api/threads/batch, which filters by InboxThread.id.
     """
     records_provided = history_records is not None
     log.info(
@@ -135,26 +144,36 @@ def partial_sync_inbox(
         log.info("partial_sync_inbox: user=%s no history records → returning empty", user.id)
         return []
 
-    touched: set[str] = set()
+    touched_gmail_ids: set[str] = set()
     for record in history_records:
         # v1 only handles messagesAdded; messagesDeleted is out of scope (users can't delete).
         for added in record.get("messagesAdded", []) or []:
             tid = (added.get("message") or {}).get("threadId")
             if tid:
-                touched.add(tid)
+                touched_gmail_ids.add(tid)
 
-    log.info("partial_sync_inbox: user=%s touched %d thread ids, fetching each", user.id, len(touched))
-    for tid in touched:
+    log.info(
+        "partial_sync_inbox: user=%s touched %d thread ids, fetching each",
+        user.id, len(touched_gmail_ids),
+    )
+    internal_ids: list[str] = []
+    for tid in touched_gmail_ids:
         log.info("partial_sync_inbox: fetching thread %s for user=%s", tid, user.id)
         thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
         parsed = assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or [])
-        _upsert_thread_with_messages(db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids)
+        internal_id = _upsert_thread_with_messages(
+            db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids,
+        )
+        internal_ids.append(internal_id)
 
     if new_history_id:
         inbox_repo.update_user_history_id(db, user_id=user.id, history_id=str(new_history_id))
     db.commit()
-    log.info("partial_sync_inbox: user=%s done, %d threads upserted", user.id, len(touched))
-    return list(touched)
+    log.info(
+        "partial_sync_inbox: user=%s done, %d threads upserted",
+        user.id, len(internal_ids),
+    )
+    return internal_ids
 
 
 def full_sync_inbox(db: Session, *, user: User) -> list[str]:
@@ -165,7 +184,9 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
     from the 200 most-recently-active gmail threads. Avoids reconciliation
     complexity for long offline gaps or expired history cursors.
 
-    Returns the touched gmail_thread_ids. Commits internally.
+    Returns the list of internal InboxThread.id values (UUID hex) that were
+    upserted — NOT gmail_thread_ids. The SSE publish path forwards these to
+    /api/threads/batch, which filters by InboxThread.id. Commits internally.
     """
     log.info("full_sync_inbox: start user=%s", user.id)
     gmail = get_gmail_client(db, user)
@@ -179,14 +200,17 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
     thread_stubs = listing.get("threads", []) or []
     log.info("full_sync_inbox: user=%s listing returned %d thread stubs", user.id, len(thread_stubs))
 
-    touched: list[str] = []
+    internal_ids: list[str] = []
     max_history_id: int = 0
     for stub in thread_stubs:
         tid = stub["id"]
         log.info("full_sync_inbox: fetching thread %s for user=%s", tid, user.id)
         thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
         parsed = assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or [])
-        _upsert_thread_with_messages(db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids)
+        internal_id = _upsert_thread_with_messages(
+            db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids,
+        )
+        internal_ids.append(internal_id)
         for m in parsed.messages:
             try:
                 hid = int(m.gmail_history_id)
@@ -194,10 +218,12 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
                 continue
             if hid > max_history_id:
                 max_history_id = hid
-        touched.append(tid)
 
     if max_history_id:
         inbox_repo.update_user_history_id(db, user_id=user.id, history_id=str(max_history_id))
     db.commit()
-    log.info("full_sync_inbox: user=%s done, %d threads touched, max_history_id=%d", user.id, len(touched), max_history_id)
-    return touched
+    log.info(
+        "full_sync_inbox: user=%s done, %d threads touched, max_history_id=%d",
+        user.id, len(internal_ids), max_history_id,
+    )
+    return internal_ids

@@ -45,9 +45,12 @@ def test_partial_sync_uses_passed_records_without_calling_history(db):
             db, user=u, history_records=records, new_history_id="200",
         )
 
-    assert ids == ["gT1"]
     [thread] = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
     assert thread.gmail_id == "gT1"
+    # The worker returns internal InboxThread.id (UUID hex), not gmail_thread_id.
+    # /api/threads/batch filters by InboxThread.id, so SSE-published ids must
+    # match that column.
+    assert ids == [thread.id]
     assert db.get(User, "u1").gmail_last_history_id == "200"
     # Critical: history.list MUST NOT have been called when records were passed.
     gmail.users().history().list.assert_not_called()
@@ -66,7 +69,8 @@ def test_partial_sync_calls_history_when_records_none(db):
     with patch("app.workers.gmail_sync.get_gmail_client", return_value=gmail):
         ids = gmail_sync.partial_sync_inbox(db, user=u)
 
-    assert ids == ["gT1"]
+    [thread] = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
+    assert ids == [thread.id]  # internal InboxThread.id, not gmail_thread_id
     gmail.users().history().list.assert_called()
 
 
@@ -135,9 +139,11 @@ def test_full_sync_inbox_pulls_latest_200_threads_and_writes(db):
     with patch("app.workers.gmail_sync.get_gmail_client", return_value=gmail):
         ids = gmail_sync.full_sync_inbox(db, user=u)
 
-    assert set(ids) == {"gT0", "gT1", "gT2"}
     threads = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
     assert {t.gmail_id for t in threads} == {"gT0", "gT1", "gT2"}
+    # full sync returns internal InboxThread.id, not gmail_thread_id (the SSE
+    # publish path forwards these to /api/threads/batch which filters by .id).
+    assert set(ids) == {t.id for t in threads}
     # full sync must populate last_history_id from the messages it ingested
     assert db.get(User, "u1").gmail_last_history_id == "999"
 
@@ -179,6 +185,8 @@ def test_full_sync_clears_existing_user_inbox_before_repopulating(db):
     with patch("app.workers.gmail_sync.get_gmail_client", return_value=gmail):
         ids = gmail_sync.full_sync_inbox(db, user=u)
 
-    assert ids == ["gT_NEW"]
+    [thread] = inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)
+    assert thread.gmail_id == "gT_NEW"
+    assert ids == [thread.id]  # internal InboxThread.id, not gmail_thread_id
     surviving = {t.gmail_id for t in inbox_repo.list_threads(db, user_id="u1", limit=10, offset=0)}
     assert surviving == {"gT_NEW"}, f"stale rows leaked into post-sync state: {surviving}"
