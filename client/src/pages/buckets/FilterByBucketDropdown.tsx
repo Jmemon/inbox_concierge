@@ -11,6 +11,8 @@ export function FilterByBucketDropdown({ buckets, selection, onChange }: {
   const [open, setOpen] = useState(false)
   const all = new Set([...buckets.map(b => b.id), UNCLASSIFIED])
   const effective = selection ?? all
+  const allSelected = !selection
+  const summary = allSelected ? 'all buckets' : `${effective.size} selected`
 
   function toggle(key: string) {
     const next = new Set(effective)
@@ -18,8 +20,9 @@ export function FilterByBucketDropdown({ buckets, selection, onChange }: {
     onChange(next.size === all.size && [...next].every(k => all.has(k)) ? null : next)
   }
 
-  const allSelected = !selection
-  const summary = allSelected ? 'all buckets' : `${effective.size} selected`
+  function toggleAll() {
+    onChange(allSelected ? new Set() : null)
+  }
 
   return (
     <div style={{ position: 'relative' }}>
@@ -32,6 +35,17 @@ export function FilterByBucketDropdown({ buckets, selection, onChange }: {
           background: '#fff', border: '1px solid #ddd', borderRadius: 4,
           padding: 8, minWidth: 220, zIndex: 10,
         }}>
+          <button
+            onClick={toggleAll}
+            style={{
+              width: '100%', textAlign: 'left', fontSize: 12,
+              padding: '4px 6px', marginBottom: 4,
+              background: 'transparent', border: '1px solid #eee', borderRadius: 3,
+              cursor: 'pointer',
+            }}
+          >
+            {allSelected ? 'deselect all' : 'select all'}
+          </button>
           {[...buckets, { id: UNCLASSIFIED, name: 'unclassified', is_default: false } as any].map(b => (
             <label key={b.id} style={{ display: 'flex', gap: 8, padding: '4px 0', fontSize: 13 }}>
               <input type="checkbox" checked={effective.has(b.id)} onChange={() => toggle(b.id)} />
