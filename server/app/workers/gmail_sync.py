@@ -163,7 +163,7 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
     max_history_id: int = 0
     for stub in thread_stubs:
         tid = stub["id"]
-        thread_resp = gmail.users().threads().get(userId="me", format="full").execute(id=tid)
+        thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
         parsed = assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or [])
         _upsert_thread_with_messages(db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids)
         for m in parsed.messages:

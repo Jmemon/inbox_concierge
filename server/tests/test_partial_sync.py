@@ -123,7 +123,14 @@ def test_full_sync_inbox_pulls_latest_200_threads_and_writes(db):
 
     gmail = MagicMock()
     gmail.users().threads().list().execute.return_value = listing
-    gmail.users().threads().get().execute.side_effect = lambda *a, **kw: _thread_fixture(kw["id"])
+
+    # Capture id from the .get() call args rather than .execute() kwargs —
+    # the real Gmail API does not accept id in execute(), only in get().
+    def _fake_threads_get(*, userId, id, format):
+        inner = MagicMock()
+        inner.execute.return_value = _thread_fixture(id)
+        return inner
+    gmail.users().threads().get.side_effect = _fake_threads_get
 
     with patch("app.workers.gmail_sync.get_gmail_client", return_value=gmail):
         ids = gmail_sync.full_sync_inbox(db, user=u)
