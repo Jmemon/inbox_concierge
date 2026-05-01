@@ -1,0 +1,11 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Worker process: consumes celery jobs (poll_new_messages, full_sync_inbox).
+# Same image as api; we override the default uvicorn CMD with celery worker.
+# Concurrency=4 is plenty for v1 (gmail api calls are I/O bound).
+startCommand = "uv run celery -A app.workers.celery_app worker --loglevel=info --concurrency=4"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

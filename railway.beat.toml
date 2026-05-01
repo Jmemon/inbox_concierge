@@ -1,0 +1,11 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Beat process: 30s schedule tick. Replicas MUST be 1 — multiple beat
+# instances multiply fan-outs against gmail.
+startCommand = "uv run celery -A app.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule"
+numReplicas = 1
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
