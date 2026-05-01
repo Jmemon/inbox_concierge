@@ -124,3 +124,61 @@ export async function requestRefresh(): Promise<void> {
   }
   console.log('[api] requestRefresh → 202 in', ms, 'ms')
 }
+
+// --- Bucket types ---
+export type Bucket = { id: string; name: string; criteria: string; is_default: boolean }
+export type BucketExampleIn = { sender: string; subject: string; snippet: string; rationale: string }
+
+// --- Bucket calls ---
+export function getBuckets(): Promise<{ buckets: Bucket[] }> {
+  return getJSON<{ buckets: Bucket[] }>('/api/buckets')
+}
+
+export async function createBucket(body: {
+  name: string; description: string;
+  confirmed_positives: BucketExampleIn[]; confirmed_negatives: BucketExampleIn[];
+}): Promise<Bucket> {
+  const r = await fetch('/api/buckets', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`create bucket: ${r.status}`)
+  return r.json()
+}
+
+export async function patchBucket(id: string, name: string): Promise<Bucket> {
+  const r = await fetch(`/api/buckets/${encodeURIComponent(id)}`, {
+    method: 'PATCH', credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }),
+  })
+  if (!r.ok) throw new Error(`rename bucket: ${r.status}`)
+  return r.json()
+}
+
+export async function deleteBucket(id: string): Promise<void> {
+  const r = await fetch(`/api/buckets/${encodeURIComponent(id)}`, {
+    method: 'DELETE', credentials: 'same-origin',
+  })
+  if (r.status !== 204) throw new Error(`delete bucket: ${r.status}`)
+}
+
+export async function postBucketDraftPreview(body: {
+  name: string; description: string; exclude_thread_ids?: string[];
+}): Promise<{ draft_id: string }> {
+  const r = await fetch('/api/buckets/draft/preview', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ exclude_thread_ids: [], ...body }),
+  })
+  if (r.status !== 202) throw new Error(`draft preview: ${r.status}`)
+  return r.json()
+}
+
+export async function postInboxExtend(beforeInternalDate: number): Promise<void> {
+  const r = await fetch('/api/inbox/extend', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ before_internal_date: beforeInternalDate }),
+  })
+  if (r.status !== 202) throw new Error(`extend: ${r.status}`)
+}
