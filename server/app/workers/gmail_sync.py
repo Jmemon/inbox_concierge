@@ -21,8 +21,8 @@ import logging
 from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from app.db.models import Bucket, User
-from app.inbox import inbox_repo
+from app.db.models import Bucket, InboxThread, User
+from app.inbox import inbox_repo, bucket_repo
 from app.llm.classify import classify
 from app.gmail.client import get_gmail_client
 from app.gmail.parser import assemble_thread, ParsedThread
@@ -36,21 +36,14 @@ class HistoryGoneError(Exception):
     ~30-day window Gmail keeps. Caller should fall back to a full sync."""
 
 
-def _available_bucket_ids(db: Session, user_id: str) -> list[str]:
-    """Default buckets (user_id IS NULL) plus any custom buckets owned by user."""
-    rows = db.execute(
-        select(Bucket).where((Bucket.user_id == None) | (Bucket.user_id == user_id))  # noqa: E711
-    ).scalars().all()
-    return [b.id for b in rows]
-
-
 def _upsert_thread_with_messages(
-    db: Session, *, user_id: str, parsed: ParsedThread, bucket_ids: list[str]
+    db: Session, *, user_id: str, parsed: ParsedThread, bucket_id: str | None,
 ) -> str:
-    """Classify the thread, then write it and all its messages to postgres.
+    """Write a thread and all its messages to postgres with a precomputed bucket_id.
 
-    Caller is responsible for the surrounding transaction (db.commit happens
-    in partial_sync_inbox / full_sync_inbox).
+    Classification is NOT done here — caller must call _classify_batch first and
+    pass the resolved bucket_id. Caller is responsible for the surrounding
+    transaction (db.commit happens in partial_sync_inbox / full_sync_inbox).
 
     Returns the internal InboxThread.id (UUID hex). This is the id the api +
     client use everywhere to identify a thread; the worker returns it so the
@@ -58,29 +51,43 @@ def _upsert_thread_with_messages(
     instead would make /api/threads/batch (which filters by InboxThread.id)
     return zero rows.
     """
-    # Skip classification when no buckets exist yet (e.g. fresh test DB or
-    # first-time user before default buckets are seeded). bucket_id is nullable.
-    bucket_id = classify(parsed, bucket_ids) if bucket_ids else None
     thread = inbox_repo.upsert_thread(
-        db,
-        user_id=user_id,
-        gmail_thread_id=parsed.gmail_thread_id,
-        subject=parsed.subject,
-        bucket_id=bucket_id,
+        db, user_id=user_id, gmail_thread_id=parsed.gmail_thread_id,
+        subject=parsed.subject, bucket_id=bucket_id,
     )
     for m in parsed.messages:
         inbox_repo.upsert_message(
-            db,
-            user_id=user_id,
-            gmail_thread_id=parsed.gmail_thread_id,
+            db, user_id=user_id, gmail_thread_id=parsed.gmail_thread_id,
             gmail_message_id=m.gmail_message_id,
             gmail_internal_date=m.gmail_internal_date,
             gmail_history_id=m.gmail_history_id,
-            to_addr=m.to_addr,
-            from_addr=m.from_addr,
-            body_preview=m.body_preview,
+            to_addr=m.to_addr, from_addr=m.from_addr, body_preview=m.body_preview,
         )
     return thread.id
+
+
+def _classify_batch(db: Session, *, user_id: str, parsed_list: list[ParsedThread]) -> list[str | None]:
+    """Classify a batch of parsed threads in one parallel LLM call.
+
+    Loads active buckets for the user once, then fetches each thread's existing
+    bucket_id from postgres as a stability hint (prevents needless re-routing
+    of already-classified threads). Delegates to classify() which runs all
+    _classify_one coroutines concurrently under the shared semaphore.
+    Returns a list of bucket_ids (or None) in the same order as parsed_list.
+    """
+    if not parsed_list:
+        return []
+    buckets = bucket_repo.list_active(db, user_id=user_id)
+    current = []
+    for parsed in parsed_list:
+        existing = db.execute(
+            select(InboxThread.bucket_id).where(
+                InboxThread.user_id == user_id,
+                InboxThread.gmail_id == parsed.gmail_thread_id,
+            )
+        ).scalar_one_or_none()
+        current.append(existing)
+    return classify(parsed_list, buckets, current)
 
 
 def fetch_history_records(
@@ -133,7 +140,6 @@ def partial_sync_inbox(
         user.id, records_provided,
     )
     gmail = get_gmail_client(db, user)
-    bucket_ids = _available_bucket_ids(db, user.id)
 
     if history_records is None:
         history_records, new_history_id = fetch_history_records(
@@ -156,15 +162,20 @@ def partial_sync_inbox(
         "partial_sync_inbox: user=%s touched %d thread ids, fetching each",
         user.id, len(touched_gmail_ids),
     )
-    internal_ids: list[str] = []
+
+    # Parse all touched threads first, then classify in one batch call, then upsert.
+    # This lets classify() parallelize LLM calls across all threads in a single gather().
+    parsed_list: list[ParsedThread] = []
     for tid in touched_gmail_ids:
         log.info("partial_sync_inbox: fetching thread %s for user=%s", tid, user.id)
         thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
-        parsed = assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or [])
-        internal_id = _upsert_thread_with_messages(
-            db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids,
-        )
-        internal_ids.append(internal_id)
+        parsed_list.append(assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or []))
+
+    bucket_ids = _classify_batch(db, user_id=user.id, parsed_list=parsed_list)
+    internal_ids = [
+        _upsert_thread_with_messages(db, user_id=user.id, parsed=p, bucket_id=b)
+        for p, b in zip(parsed_list, bucket_ids)
+    ]
 
     if new_history_id:
         inbox_repo.update_user_history_id(db, user_id=user.id, history_id=str(new_history_id))
@@ -190,7 +201,6 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
     """
     log.info("full_sync_inbox: start user=%s", user.id)
     gmail = get_gmail_client(db, user)
-    bucket_ids = _available_bucket_ids(db, user.id)
 
     # Nuke first. Order: messages → threads (FK constraint).
     inbox_repo.clear_user_inbox(db, user_id=user.id)
@@ -200,17 +210,25 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
     thread_stubs = listing.get("threads", []) or []
     log.info("full_sync_inbox: user=%s listing returned %d thread stubs", user.id, len(thread_stubs))
 
-    internal_ids: list[str] = []
-    max_history_id: int = 0
+    # Parse all threads first, then classify in one batch call, then upsert.
+    # This lets classify() parallelize LLM calls across all threads in a single gather().
+    parsed_list: list[ParsedThread] = []
     for stub in thread_stubs:
         tid = stub["id"]
         log.info("full_sync_inbox: fetching thread %s for user=%s", tid, user.id)
         thread_resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
-        parsed = assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or [])
-        internal_id = _upsert_thread_with_messages(
-            db, user_id=user.id, parsed=parsed, bucket_ids=bucket_ids,
-        )
-        internal_ids.append(internal_id)
+        parsed_list.append(assemble_thread(thread_id=tid, raw_messages=thread_resp.get("messages", []) or []))
+
+    bucket_ids = _classify_batch(db, user_id=user.id, parsed_list=parsed_list)
+    internal_ids = [
+        _upsert_thread_with_messages(db, user_id=user.id, parsed=p, bucket_id=b)
+        for p, b in zip(parsed_list, bucket_ids)
+    ]
+
+    # Walk parsed_list once after upserting to find the max history_id across all
+    # ingested messages — used to advance the user's gmail cursor.
+    max_history_id: int = 0
+    for parsed in parsed_list:
         for m in parsed.messages:
             try:
                 hid = int(m.gmail_history_id)
