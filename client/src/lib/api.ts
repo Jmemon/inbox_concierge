@@ -1,3 +1,5 @@
+import type { PreviewExample } from './sse'
+
 export type AuthError = 'unauthorized' | 'network'
 
 // Generic JSON fetch with timing and logging so every API call is visible in DevTools.
@@ -172,6 +174,40 @@ export async function postBucketDraftPreview(body: {
   })
   if (r.status !== 202) throw new Error(`draft preview: ${r.status}`)
   return r.json()
+}
+
+export type DraftPreviewPoll =
+  | { status: 'pending' }
+  | { status: 'ready'; positives: PreviewExample[]; near_misses: PreviewExample[] }
+  | { status: 'gone' }   // 404: TTL expired or unknown draft_id
+
+// Polling fallback for the SSE-pushed bucket_draft_preview event. The worker
+// caches its result in redis with a 600s TTL keyed on draft_id; this hits
+// that cache directly so a lost SSE frame doesn't strand the modal.
+export async function getBucketDraftPreview(draft_id: string): Promise<DraftPreviewPoll> {
+  const url = `/api/buckets/draft/preview/${encodeURIComponent(draft_id)}`
+  const t0 = performance.now()
+  const r = await fetch(url, { credentials: 'same-origin' })
+  const ms = Math.round(performance.now() - t0)
+  if (r.status === 202) {
+    console.log('[api] poll', url, '→ pending', ms, 'ms')
+    return { status: 'pending' }
+  }
+  if (r.status === 200) {
+    const body = await r.json() as {
+      status: 'ready'; positives: PreviewExample[]; near_misses: PreviewExample[]
+    }
+    console.log('[api] poll', url, '→ ready (+',
+                body.positives.length, 'positives, +',
+                body.near_misses.length, 'near-misses) in', ms, 'ms')
+    return body
+  }
+  if (r.status === 404) {
+    console.warn('[api] poll', url, '→ 404 (gone) in', ms, 'ms')
+    return { status: 'gone' }
+  }
+  console.error('[api] poll', url, '→', r.status, ms, 'ms')
+  throw new Error(`draft preview poll: ${r.status}`)
 }
 
 export async function postInboxExtend(beforeInternalDate: number): Promise<void> {

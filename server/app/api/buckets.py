@@ -2,13 +2,13 @@
 
 import logging
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.db.models import User, Bucket
 from app.db.session import get_db
 from app.deps import get_current_user
-from app.inbox import bucket_repo
+from app.inbox import bucket_repo, preview_cache
 from app.workers import tasks
 
 
@@ -100,15 +100,46 @@ class _PreviewBody(BaseModel):
 
 @router.post("/buckets/draft/preview", status_code=202)
 def post_draft_preview(body: _PreviewBody, user: User = Depends(get_current_user)) -> dict:
-    """Enqueue a draft preview scoring job and return a draft_id to poll for results.
+    """Enqueue a draft preview scoring job and return a draft_id.
 
-    The worker (draft_preview_bucket) scores up to 200 inbox threads against
-    the given name/description and publishes a bucket_draft_preview SSE event
-    keyed on draft_id when done.
+    Result delivery has two paths the client can use interchangeably:
+      - SSE push: a bucket_draft_preview event keyed on draft_id when the
+        worker finishes (fast, fire-and-forget — lost if the SSE connection
+        blips during the ~40s scoring window).
+      - Polling: GET /api/buckets/draft/preview/{draft_id} returns the
+        cached result with a 600s TTL. Safety net for SSE delivery loss.
     """
     draft_id = uuid.uuid4().hex
+    # mark pending BEFORE enqueueing so the GET endpoint never returns 404
+    # to a fast-polling client racing the worker's first redis write.
+    preview_cache.mark_pending(draft_id, user_id=user.id)
     tasks.draft_preview_bucket.apply_async(
         args=[user.id, draft_id, body.name, body.description, body.exclude_thread_ids],
         countdown=0,
     )
     return {"draft_id": draft_id}
+
+
+@router.get("/buckets/draft/preview/{draft_id}")
+def get_draft_preview(draft_id: str, response: Response,
+                      user: User = Depends(get_current_user)) -> dict:
+    """Polling fallback for the SSE-pushed preview result.
+
+      200 + {status:"ready", positives, near_misses} — worker finished.
+      202 + {status:"pending"}                       — still scoring.
+      404 — unknown draft_id (typo, expired, or never created).
+      403 — draft belongs to a different user.
+    """
+    entry = preview_cache.load(draft_id)
+    if entry is None:
+        raise HTTPException(404, "not found")
+    if entry.get("user_id") != user.id:
+        raise HTTPException(403, "not your preview")
+    if entry.get("status") == "pending":
+        response.status_code = 202
+        return {"status": "pending"}
+    return {
+        "status": "ready",
+        "positives": entry.get("positives", []),
+        "near_misses": entry.get("near_misses", []),
+    }

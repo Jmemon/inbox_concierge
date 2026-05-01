@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { subscribeSse, type PreviewExample } from '../../lib/sse'
-import { postBucketDraftPreview, type Bucket, type BucketExampleIn } from '../../lib/api'
+import {
+  postBucketDraftPreview, getBucketDraftPreview,
+  type Bucket, type BucketExampleIn,
+} from '../../lib/api'
 
 type Choice = 'positive' | 'near_miss' | 'rejected'
 type ExampleState = PreviewExample & { initial: Exclude<Choice, 'rejected'>; choice: Choice }
@@ -27,18 +30,71 @@ export function NewBucketModal({ onClose, onSave }: {
   const [examples, setExamples] = useState<ExampleState[]>([])
   const seenIds = examples.map(e => e.thread_id)
 
-  // Subscribe to preview events keyed on draft_id.
+  // Idempotent apply: a result for a given draft_id can arrive via SSE OR
+  // via the polling fallback (or both, in either order). appliedRef ensures
+  // we only push examples + flip step once per draft_id.
+  const appliedRef = useRef<Set<string>>(new Set())
+
+  function applyPreview(forDraftId: string,
+                        positives: PreviewExample[], nearMisses: PreviewExample[]) {
+    if (appliedRef.current.has(forDraftId)) return
+    appliedRef.current.add(forDraftId)
+    const newOnes: ExampleState[] = [
+      ...positives.map(ex => ({ ...ex, initial: 'positive' as const, choice: 'positive' as const })),
+      ...nearMisses.map(ex => ({ ...ex, initial: 'near_miss' as const, choice: 'near_miss' as const })),
+    ]
+    setExamples(prev => [...prev, ...newOnes])
+    setStep('review')
+  }
+
+  // Fast path: SSE push when the worker publishes.
   useEffect(() => {
     return subscribeSse((e) => {
       if (e.event !== 'bucket_draft_preview' || e.draft_id !== draftId) return
-      const newOnes: ExampleState[] = [
-        ...e.positives.map(ex => ({ ...ex, initial: 'positive' as const, choice: 'positive' as const })),
-        ...e.near_misses.map(ex => ({ ...ex, initial: 'near_miss' as const, choice: 'near_miss' as const })),
-      ]
-      setExamples(prev => [...prev, ...newOnes])
-      setStep('review')
+      applyPreview(e.draft_id, e.positives, e.near_misses)
     })
   }, [draftId])
+
+  // Safety net: poll the cache every 5s while pending. SSE-delivery loss
+  // (connection blip during the ~40s scoring window, browser tab throttling,
+  // redis pubsub having no subscriber at the publish moment) used to make
+  // this feature ~50/50; polling decouples correctness from connection life.
+  // Stops on success, on draftId change (user clicked "more examples"),
+  // or on unmount.
+  useEffect(() => {
+    if (step !== 'pending' || !draftId) return
+    const localId = draftId
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    async function tick() {
+      if (cancelled || appliedRef.current.has(localId)) return
+      try {
+        const r = await getBucketDraftPreview(localId)
+        if (cancelled) return
+        if (r.status === 'ready') {
+          applyPreview(localId, r.positives, r.near_misses)
+          return
+        }
+        if (r.status === 'gone') {
+          console.warn('[bucket draft preview] cache expired before result arrived')
+          return  // give up; user can click "find examples" again
+        }
+      } catch (e) {
+        console.error('[bucket draft preview] poll failed', e)
+      }
+      timer = setTimeout(tick, 5000)
+    }
+
+    // Start at 5s — let SSE win on the happy path (~40s scoring), and only
+    // burn HTTP requests if SSE doesn't deliver.
+    timer = setTimeout(tick, 5000)
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [draftId, step])
 
   async function startPreview() {
     const { draft_id } = await postBucketDraftPreview({ name, description, exclude_thread_ids: seenIds })

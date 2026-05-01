@@ -24,6 +24,7 @@ from app.realtime import active_users, sync_lock
 from app.realtime import redis_client as _redis_client
 from app.gmail.client import get_gmail_client
 from app.gmail.parser import assemble_thread, thread_to_string
+from app.inbox import preview_cache
 from app.llm import client as llm_client
 from app.llm.prompts import score_thread
 from app.workers import gmail_sync
@@ -35,7 +36,7 @@ log = logging.getLogger(__name__)
 
 # --- draft preview constants ---
 # Maximum number of inbox threads to consider when scoring candidates.
-CANDIDATE_LIMIT = 200
+CANDIDATE_LIMIT = 100
 # If the candidate pool is below this, extend history inline before scoring.
 EXTEND_THRESHOLD = 100
 # How many scored results to surface in each category.
@@ -202,6 +203,12 @@ def draft_preview_bucket(user_id: str, draft_id: str, name: str, description: st
                            key=lambda s: -s["score"])[:TOP_POSITIVES]
         near = sorted([s for s in scored if NEAR_MISS_LOW <= s["score"] <= NEAR_MISS_HIGH],
                       key=lambda s: -s["score"])[:TOP_NEAR_MISSES]
+
+        # Cache before publish: a polling client that arrives between the two
+        # operations sees the ready result rather than stale "pending". The
+        # cache is the source of truth; the SSE push is a perf optimization.
+        preview_cache.store_result(draft_id, user_id=user_id,
+                                   positives=positives, near_misses=near)
 
         _publish(user_id, "bucket_draft_preview", {
             "draft_id": draft_id, "positives": positives, "near_misses": near,
