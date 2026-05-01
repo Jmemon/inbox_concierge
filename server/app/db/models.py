@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, ForeignKey, BigInteger, UniqueConstraint
+from sqlalchemy import Boolean, String, Text, DateTime, ForeignKey, BigInteger, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -43,6 +43,10 @@ class Bucket(Base):
     user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     criteria: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Soft-delete flag for custom buckets. Defaults are never deleted (their
+    # rows always have is_deleted=False). When True, GET /api/buckets omits
+    # the row and the classifier excludes it from _available_bucket_ids.
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
 
 class InboxThread(Base):
