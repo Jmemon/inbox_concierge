@@ -57,14 +57,27 @@ export function NewBucketModal({ onClose }: { onClose: () => void }) {
       <div style={modalStyle}>
         <h3 style={{ margin: 0 }}>new bucket</h3>
         {step === 'form' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
-            <label>name <input value={name} onChange={e => setName(e.target.value)} /></label>
-            <label>what kind of email goes in this bucket?
-              <textarea rows={4} value={description} onChange={e => setDescription(e.target.value)} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 16 }}>
+            <label style={fieldLabelStyle}>
+              <span>name</span>
+              <input
+                style={inputStyle}
+                value={name}
+                onChange={e => setName(e.target.value)}
+              />
             </label>
-            <div>
+            <label style={fieldLabelStyle}>
+              <span>what kind of email goes in this bucket?</span>
+              <textarea
+                style={textareaStyle}
+                rows={4}
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+              />
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
               <button disabled={!name || !description} onClick={startPreview}>find examples</button>
-              <button onClick={onClose} style={{ marginLeft: 8 }}>cancel</button>
+              <button onClick={onClose}>cancel</button>
             </div>
           </div>
         )}
@@ -122,6 +135,21 @@ function toExampleIn(ex: ExampleState) {
 const modalStyle: CSSProperties = {
   background: '#fff', padding: 24, borderRadius: 8, maxWidth: 720, width: '90%',
   maxHeight: '80vh', overflowY: 'auto',
+}
+
+// Form field label: label text sits above its input on its own line so inputs
+// don't get squeezed inline next to the prompt.
+const fieldLabelStyle: CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 6, fontSize: 14,
+}
+
+const inputStyle: CSSProperties = {
+  width: '100%', boxSizing: 'border-box', padding: '6px 8px', fontSize: 14,
+  borderRadius: 4, border: '1px solid #ccc',
+}
+
+const textareaStyle: CSSProperties = {
+  ...inputStyle, fontFamily: 'inherit', resize: 'vertical',
 }
 
 function Backdrop({ children, onClose }: { children: ReactNode; onClose: () => void }) {
