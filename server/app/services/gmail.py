@@ -7,8 +7,8 @@ from app.db.models import User
 from app.services import crypto, google_oauth
 
 
-def _ensure_fresh_access_token(db: Session, user: User) -> str:
-    """Returns a usable access token for `user`, refreshing and persisting if needed."""
+def ensure_fresh_access_token(db: Session, user: User) -> str:
+    """Returns a usable access token, refreshing and persisting if needed."""
     if (
         user.gmail_access_token
         and user.gmail_access_token_expires_at
@@ -39,13 +39,21 @@ def _credentials(access_token: str, refresh_token: str | None) -> Credentials:
     )
 
 
-def fetch_profile_summary(db: Session, user: User) -> dict:
-    """Returns Gmail profile + first three message subjects to prove read access works."""
-    access_token = _ensure_fresh_access_token(db, user)
+def get_gmail_client(db: Session, user: User):
+    """Build an authenticated googleapiclient gmail v1 resource for the user.
+
+    Both api routes (/profile probe) and celery workers go through here so
+    refresh-on-demand behaves identically in both call sites.
+    """
+    access_token = ensure_fresh_access_token(db, user)
     refresh_plain = crypto.decrypt(user.gmail_refresh_token) if user.gmail_refresh_token else None
     creds = _credentials(access_token, refresh_plain)
-    gmail = build("gmail", "v1", credentials=creds, cache_discovery=False)
+    return build("gmail", "v1", credentials=creds, cache_discovery=False)
 
+
+def fetch_profile_summary(db: Session, user: User) -> dict:
+    """Returns Gmail profile + first three message subjects to prove read access works."""
+    gmail = get_gmail_client(db, user)
     profile = gmail.users().getProfile(userId="me").execute()
     listing = gmail.users().messages().list(userId="me", maxResults=3).execute()
     subjects: list[str] = []
@@ -59,7 +67,6 @@ def fetch_profile_summary(db: Session, user: User) -> dict:
         headers = full.get("payload", {}).get("headers", [])
         subj = next((h["value"] for h in headers if h["name"].lower() == "subject"), "(no subject)")
         subjects.append(subj)
-
     return {
         "email": profile.get("emailAddress"),
         "messages_total": profile.get("messagesTotal"),
