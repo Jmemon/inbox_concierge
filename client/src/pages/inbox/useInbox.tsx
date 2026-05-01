@@ -4,7 +4,10 @@ import { subscribeSse } from '../../lib/sse'
 
 
 const PAGE_SIZE = 50
-const SNAPSHOT_LIMIT = 200
+// Pull every stored thread on snapshot so display-layer pagination walks the
+// full local set before requesting an extend. Server caps at MAX_LIMIT (10k);
+// extend pulls older history beyond what's stored.
+const SNAPSHOT_LIMIT = 10000
 const UNCLASSIFIED = 'unclassified'
 
 type IdLayer = string[]
@@ -109,17 +112,14 @@ export function useInbox(opts: {
       .map(id => displayLayer[id]).filter(Boolean)
   }, [page, filteredIdLayer, displayLayer])
 
-  // Auto-extend trigger: when on the last page and it's partial, AND server
-  // hasn't told us we're at the bottom of inbox history.
+  // Auto-extend trigger: when the user is on (or past) the last page and the
+  // server hasn't told us we're at the bottom of inbox history. Filter active
+  // means we don't auto-extend (filter can artificially shrink the page count).
   useEffect(() => {
     if (more === false || extendInFlight) return
-    const start = (page - 1) * PAGE_SIZE
-    const remaining = filteredIdLayer.length - start
-    if (remaining < PAGE_SIZE && !opts.filterSelection) {
-      // Only auto-extend when no filter active (filter could artificially shrink the page).
-      void requestExtend()
-    }
-  }, [page, filteredIdLayer.length, more, extendInFlight, opts.filterSelection, requestExtend])
+    if (opts.filterSelection) return
+    if (page >= pageCount) void requestExtend()
+  }, [page, pageCount, more, extendInFlight, opts.filterSelection, requestExtend])
 
   const hydrateCurrentPage = useCallback(async () => {
     const start = (page - 1) * PAGE_SIZE
