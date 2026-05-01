@@ -130,6 +130,23 @@ def batch_get_threads(
     return {"threads": serialized}
 
 
+class _ExtendBody(BaseModel):
+    before_internal_date: int = Field(gt=0)
+
+
+@router.post("/inbox/extend", status_code=202)
+def trigger_extend(body: _ExtendBody, user: User = Depends(get_current_user)) -> JSONResponse:
+    """Kick off an on-demand extend for threads older than before_internal_date (ms).
+
+    The result arrives via SSE as an extend_complete event — the client does not
+    poll this endpoint for data. Returns 202 immediately after enqueuing the task.
+    """
+    tasks.extend_inbox_history_task.apply_async(
+        args=[user.id, body.before_internal_date], countdown=0,
+    )
+    return JSONResponse({"ok": True}, status_code=202)
+
+
 @router.post("/inbox/refresh", status_code=202)
 def trigger_refresh(user: User = Depends(get_current_user)) -> JSONResponse:
     """On-demand poll. Mirrors the kickoff path in the SSE endpoint:

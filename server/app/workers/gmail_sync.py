@@ -245,3 +245,35 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
         user.id, len(internal_ids), max_history_id,
     )
     return internal_ids
+
+
+def extend_inbox_history(db: Session, *, user: User, before_internal_date_ms: int) -> tuple[list[str], bool]:
+    """Pull threads older than the given gmail_internal_date_ms. Returns
+    (internal_thread_ids, more). more = (gmail returned 200 stubs).
+    Caller manages the surrounding sync_lock. Does NOT touch gmail_last_history_id
+    or clear inbox rows."""
+    log.info("extend: user=%s before_ms=%d", user.id, before_internal_date_ms)
+    gmail = get_gmail_client(db, user)
+    before_secs = before_internal_date_ms // 1000
+    listing = gmail.users().threads().list(
+        userId="me", q=f"before:{before_secs}", maxResults=200,
+    ).execute()
+    stubs = listing.get("threads", []) or []
+
+    parsed_list: list[ParsedThread] = []
+    for stub in stubs:
+        tid = stub["id"]
+        try:
+            resp = gmail.users().threads().get(userId="me", id=tid, format="full").execute()
+            parsed_list.append(assemble_thread(thread_id=tid,
+                                                raw_messages=resp.get("messages", []) or []))
+        except Exception:
+            log.exception("extend: threads.get failed for %s", tid)
+
+    bucket_ids = _classify_batch(db, user_id=user.id, parsed_list=parsed_list)
+    internal_ids = [
+        _upsert_thread_with_messages(db, user_id=user.id, parsed=p, bucket_id=b)
+        for p, b in zip(parsed_list, bucket_ids)
+    ]
+    db.commit()
+    return internal_ids, len(stubs) == 200

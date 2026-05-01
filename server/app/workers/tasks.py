@@ -253,6 +253,36 @@ def _extend_inline(db, *, user) -> None:
         sync_lock.release(user.id)
 
 
+@celery_app.task(name="app.workers.tasks.extend_inbox_history")
+def extend_inbox_history_task(user_id: str, before_internal_date_ms: int) -> None:
+    """Pull older threads on demand for a user.
+
+    Acquires the per-user sync_lock so it cannot race with a concurrent full
+    or partial sync. Calls extend_inbox_history which issues gmail.threads.list
+    with q=before:<unix-secs>, classifies+upserts each stub, and leaves
+    gmail_last_history_id untouched (the cursor must stay anchored at the most-
+    recent message so future partial syncs keep working). Publishes an
+    extend_complete event with the list of internal thread ids and a 'more' flag
+    that is True when Gmail returned the full page of 200 stubs (meaning there
+    are likely even older threads available).
+    """
+    if not sync_lock.acquire(user_id):
+        log.info("extend_task: user=%s syncing already, skip", user_id)
+        return
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        if user is None:
+            return
+        ids, more = gmail_sync.extend_inbox_history(
+            db, user=user, before_internal_date_ms=before_internal_date_ms,
+        )
+        _publish(user_id, "extend_complete", {"thread_ids": ids, "more": more})
+    finally:
+        db.close()
+        sync_lock.release(user_id)
+
+
 def _score_all(gmail, *, candidates: list[dict], name: str, description: str) -> list[dict]:
     """Refetch full thread bodies from Gmail sequentially, then score in parallel.
 
