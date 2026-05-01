@@ -1,39 +1,28 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '../auth/useAuth'
 import { useInbox } from './inbox/useInbox'
 import { useInboxSse } from './inbox/useInboxSse'
 import { InboxList } from './inbox/InboxList'
 import { Pagination } from './inbox/Pagination'
-import { ReloadButton } from './inbox/ReloadButton'
+import { useBuckets } from './buckets/useBuckets'
+import { SecondaryHeader } from './buckets/SecondaryHeader'
+import { ViewBucketsModal } from './buckets/ViewBucketsModal'
+import { NewBucketModal } from './buckets/NewBucketModal'
+
 
 export default function Home() {
   const { state, signOut } = useAuth()
-  const inbox = useInbox()
+  const { buckets, rename, softDelete } = useBuckets()
+  const [filterSelection, setFilterSelection] = useState<Set<string> | null>(null)
+  const [showView, setShowView] = useState(false)
+  const [showNew, setShowNew] = useState(false)
 
-  // Single render-time log capturing the most diagnostic state. Makes it
-  // immediately clear in DevTools whether snapshot returned 0 threads (suspect)
-  // vs whether the SSE event arrived but the merge didn't apply.
-  console.log('[Home] render', {
-    loading: inbox.loading,
-    error: inbox.error,
-    page: inbox.page,
-    pageCount: inbox.pageCount,
-    idLayerLen: inbox.idLayer.length,
-    displayLayerLen: Object.keys(inbox.displayLayer).length,
-    pageThreadsLen: inbox.pageThreads.length,
-  })
-
-  useInboxSse({
-    onApply: inbox.applyThreadUpdates,
-    snapshot: inbox.snapshot,
-  })
+  const inbox = useInbox({ buckets, filterSelection })
+  useInboxSse({ onApply: inbox.applyThreadUpdates, snapshot: inbox.snapshot })
 
   // Hydrate the current page when navigating to a page whose thread ids are
   // not yet in the display layer.
-  useEffect(() => {
-    void inbox.hydrateCurrentPage()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inbox.page])
+  useEffect(() => { void inbox.hydrateCurrentPage() /* eslint-disable-next-line */ }, [inbox.page])
 
   if (state.status !== 'authed') return null
 
@@ -45,17 +34,35 @@ export default function Home() {
       }}>
         <div style={{ fontWeight: 600 }}>inbox concierge</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <ReloadButton />
           <span style={{ fontSize: 14, color: '#444' }}>{state.user.name ?? state.user.email}</span>
           <button onClick={signOut} style={{ fontSize: 13, padding: '6px 10px' }}>sign out</button>
         </div>
       </header>
+
+      {/* SecondaryHeader owns the reload button, filter dropdown, and bucket controls.
+          The old top-bar ReloadButton import is intentionally removed. */}
+      <SecondaryHeader
+        buckets={buckets} filterSelection={filterSelection}
+        onFilterChange={setFilterSelection}
+        onViewBuckets={() => setShowView(true)}
+        onNewBucket={() => setShowNew(true)}
+      />
+
       <main>
         {inbox.error && <div style={{ color: '#8a1c25', padding: 16 }}>error: {inbox.error}</div>}
         {!inbox.error && inbox.loading && <div style={{ padding: 24 }}>loading…</div>}
         {!inbox.loading && <InboxList threads={inbox.pageThreads} />}
         <Pagination page={inbox.page} pageCount={inbox.pageCount} onChange={inbox.setPage} />
+        {inbox.more === false && (
+          <div style={{ padding: 12, fontSize: 12, color: '#888', textAlign: 'center' }}>
+            (end of inbox history)
+          </div>
+        )}
       </main>
+
+      {showView && <ViewBucketsModal buckets={buckets} onClose={() => setShowView(false)}
+                                       onRename={rename} onDelete={softDelete} />}
+      {showNew && <NewBucketModal onClose={() => setShowNew(false)} />}
     </div>
   )
 }
