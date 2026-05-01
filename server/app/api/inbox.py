@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.db.models import User, InboxMessage
 from app.db.session import get_db
 from app.deps import get_current_user
-from app.services import inbox_repo
+from app.inbox import inbox_repo
 from app.workers import tasks
 
 

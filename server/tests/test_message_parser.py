@@ -1,5 +1,5 @@
 import base64
-from app.services import message_parser
+from app.gmail import parser as message_parser
 
 
 def _b64url(s: str) -> str:

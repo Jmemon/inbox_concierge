@@ -7,7 +7,8 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.db.models import Base, User
 from app.db.session import get_db
-from app.services import sessions, inbox_repo
+from app.auth import sessions
+from app.inbox import inbox_repo
 
 
 @pytest.fixture

@@ -17,9 +17,9 @@ import json
 import logging
 from app.db.session import SessionLocal as _AppSessionLocal
 from app.db.models import User
-from app.services import active_users, sync_lock
-from app.services import redis_client as _redis_client
-from app.services.gmail import get_gmail_client
+from app.realtime import active_users, sync_lock
+from app.realtime import redis_client as _redis_client
+from app.gmail.client import get_gmail_client
 from app.workers import gmail_sync
 from app.workers.celery_app import celery_app
 

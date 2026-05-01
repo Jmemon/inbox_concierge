@@ -2,7 +2,7 @@ from fastapi import Cookie, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db.models import User
 from app.db.session import get_db
-from app.services import sessions
+from app.auth import sessions
 
 
 def get_current_user(

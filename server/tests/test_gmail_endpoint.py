@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.db.models import Base
 from app.db.session import get_db
-from app.services import google_oauth
+from app.auth import google_oauth
 
 
 @pytest.fixture
@@ -58,7 +58,7 @@ def test_gmail_profile_returns_summary_when_authed(client_with_session):
         "threads_total": 5,
         "recent_subjects": ["hi", "hello", "hola"],
     }
-    with patch("app.api.gmail.gmail_service.fetch_profile_summary", return_value=fake_summary):
+    with patch("app.api.gmail.fetch_profile_summary", return_value=fake_summary):
         r = client_with_session.get("/api/gmail/profile")
     assert r.status_code == 200
     assert r.json() == fake_summary

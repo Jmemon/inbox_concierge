@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import uuid
 import pytest
 from app.db.models import User
-from app.services import sessions as svc
+from app.auth import sessions as svc
 
 
 @pytest.fixture

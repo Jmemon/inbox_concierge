@@ -2,15 +2,15 @@ import asyncio
 import json
 import pytest
 import fakeredis.aioredis
-from app.services import pubsub, sse_connections
+from app.realtime import pubsub, sse_connections
 
 
 @pytest.mark.asyncio
 async def test_dispatcher_routes_messages_to_local_queues(monkeypatch):
     sse_connections.reset()
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr("app.services.redis_client.get_async_redis", lambda: fake)
-    monkeypatch.setattr("app.services.pubsub._dispatcher", pubsub.PubSubDispatcher())
+    monkeypatch.setattr("app.realtime.redis_client.get_async_redis", lambda: fake)
+    monkeypatch.setattr("app.realtime.pubsub._dispatcher", pubsub.PubSubDispatcher())
 
     q = asyncio.Queue()
     sse_connections.add("u1", q)

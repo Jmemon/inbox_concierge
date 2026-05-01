@@ -7,7 +7,7 @@ without changing callers in workers/gmail_sync.py.
 """
 
 import hashlib
-from app.services.message_parser import ParsedThread
+from app.gmail.parser import ParsedThread
 
 
 def classify(thread: ParsedThread, available_bucket_ids: list[str]) -> str:

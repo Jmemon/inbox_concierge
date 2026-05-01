@@ -22,10 +22,10 @@ from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from app.db.models import Bucket, User
-from app.services import inbox_repo
-from app.services.classification import classify
-from app.services.gmail import get_gmail_client
-from app.services.message_parser import assemble_thread, ParsedThread
+from app.inbox import inbox_repo
+from app.llm.classify import classify
+from app.gmail.client import get_gmail_client
+from app.gmail.parser import assemble_thread, ParsedThread
 
 
 log = logging.getLogger(__name__)

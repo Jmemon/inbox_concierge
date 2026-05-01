@@ -1,13 +1,13 @@
 import time
 import fakeredis
 import pytest
-from app.services import active_users
+from app.realtime import active_users
 
 
 @pytest.fixture
 def fake_redis(monkeypatch):
     r = fakeredis.FakeStrictRedis(decode_responses=True)
-    monkeypatch.setattr("app.services.redis_client.get_redis", lambda: r)
+    monkeypatch.setattr("app.realtime.redis_client.get_redis", lambda: r)
     return r
 
 

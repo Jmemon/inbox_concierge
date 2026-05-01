@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from app.db.models import User
 from app.deps import get_current_user
-from app.services import active_users, pubsub, sse_connections
+from app.realtime import active_users, pubsub, sse_connections
 from app.workers import tasks
 
 

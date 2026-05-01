@@ -1,7 +1,7 @@
 import time
 import pytest
 from itsdangerous import BadSignature
-from app.services.state_cookie import make_state, verify_state
+from app.auth.state_cookie import make_state, verify_state
 
 
 def test_make_and_verify_roundtrip():

@@ -10,13 +10,13 @@ blocking the dispatcher. Per the homepage spec, slow consumers are tolerated.
 
 IMPORTANT: `get_async_redis` is accessed via the `redis_client` module attribute
 (not imported directly) so that test monkeypatches on
-`app.services.redis_client.get_async_redis` take effect inside this module.
+`app.realtime.redis_client.get_async_redis` take effect inside this module.
 """
 
 import asyncio
 import logging
-from app.services import sse_connections
-from app.services import redis_client as redis_client_module
+from app.realtime import sse_connections
+from app.realtime import redis_client as redis_client_module
 
 
 log = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ from app.config import get_settings
 from app.db.models import User
 from app.db.session import get_db
 from app.deps import get_current_user
-from app.services import crypto, google_oauth, sessions, state_cookie
+from app.auth import crypto, google_oauth, sessions, state_cookie
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])

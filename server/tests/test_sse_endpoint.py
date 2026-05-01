@@ -17,16 +17,17 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.db.models import Base, User
 from app.db.session import get_db
-from app.services import sessions, sse_connections
+from app.auth import sessions
+from app.realtime import sse_connections
 
 
 @pytest.fixture
 def authed_client(tmp_path, monkeypatch):
     sse_connections.reset()
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr("app.services.redis_client.get_async_redis", lambda: fake)
+    monkeypatch.setattr("app.realtime.redis_client.get_async_redis", lambda: fake)
     import fakeredis as fakeredis_sync
-    monkeypatch.setattr("app.services.redis_client.get_redis",
+    monkeypatch.setattr("app.realtime.redis_client.get_redis",
                         lambda: fakeredis_sync.FakeStrictRedis(decode_responses=True))
 
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path}/test.db", future=True)

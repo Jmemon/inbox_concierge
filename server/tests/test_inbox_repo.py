@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from app.db.models import User
-from app.services import inbox_repo
+from app.inbox import inbox_repo
 
 
 def _seed_user(db, uid="u1"):

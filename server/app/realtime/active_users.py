@@ -6,7 +6,7 @@ don't strand users in the registry forever.
 """
 
 import time
-from app.services import redis_client
+from app.realtime import redis_client
 
 
 KEY = "active_users"

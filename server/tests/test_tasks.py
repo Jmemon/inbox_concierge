@@ -15,7 +15,7 @@ from app.workers import tasks, gmail_sync
 @pytest.fixture
 def fake_redis(monkeypatch):
     r = fakeredis.FakeStrictRedis(decode_responses=True)
-    monkeypatch.setattr("app.services.redis_client.get_redis", lambda: r)
+    monkeypatch.setattr("app.realtime.redis_client.get_redis", lambda: r)
     return r
 
 

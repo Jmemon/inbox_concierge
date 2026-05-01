@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from googleapiclient.errors import HttpError
 from app.db.models import Base, User
-from app.services import inbox_repo
+from app.inbox import inbox_repo
 from app.workers import gmail_sync
 
 

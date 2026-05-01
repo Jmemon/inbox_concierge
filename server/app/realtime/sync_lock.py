@@ -15,7 +15,7 @@ Holders MUST release in a try/finally. Acquire returns False when another
 worker holds the lock; the caller should log + return rather than retry.
 """
 
-from app.services import redis_client
+from app.realtime import redis_client
 
 
 _KEY_PREFIX = "sync_lock"

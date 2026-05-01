@@ -17,7 +17,7 @@ from app.api.gmail import router as gmail_router
 from app.api.inbox import router as inbox_router
 from app.api.sse import router as sse_router
 from app.config import get_settings
-from app.services import pubsub
+from app.realtime import pubsub
 
 
 settings = get_settings()

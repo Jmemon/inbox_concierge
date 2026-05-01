@@ -1,5 +1,5 @@
 import asyncio
-from app.services import sse_connections
+from app.realtime import sse_connections
 
 
 def test_first_and_last_connection_signaling():

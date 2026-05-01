@@ -1,5 +1,5 @@
 import pytest
-from app.services.crypto import encrypt, decrypt
+from app.auth.crypto import encrypt, decrypt
 
 
 def test_encrypt_decrypt_roundtrip():

@@ -4,7 +4,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from app.config import get_settings
 from app.db.models import User
-from app.services import crypto, google_oauth
+from app.auth import crypto, google_oauth
 
 
 def ensure_fresh_access_token(db: Session, user: User) -> str:
