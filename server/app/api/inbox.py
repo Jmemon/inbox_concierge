@@ -33,10 +33,7 @@ router = APIRouter(prefix="/api", tags=["inbox"])
 log = logging.getLogger(__name__)
 
 DEFAULT_LIMIT = 50
-# Sane upper bound to prevent pathological requests; client snapshot pulls
-# everything currently stored so display-layer pagination has the full set
-# to walk before triggering an inbox-history extend.
-MAX_LIMIT = 10000
+MAX_LIMIT = 200
 MAX_BATCH_IDS = 500
 
 

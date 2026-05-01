@@ -4,10 +4,11 @@ import { subscribeSse } from '../../lib/sse'
 
 
 const PAGE_SIZE = 50
-// Pull every stored thread on snapshot so display-layer pagination walks the
-// full local set before requesting an extend. Server caps at MAX_LIMIT (10k);
-// extend pulls older history beyond what's stored.
-const SNAPSHOT_LIMIT = 10000
+// Initial paint: 200 threads (4 pages of 50). Auto-extend (below) pulls more
+// from Gmail history as the user paginates near the end, using the oldest
+// thread's recent-message timestamp as the cursor. Server caps at MAX_LIMIT
+// (200) to match.
+const SNAPSHOT_LIMIT = 200
 const UNCLASSIFIED = 'unclassified'
 
 type IdLayer = string[]
