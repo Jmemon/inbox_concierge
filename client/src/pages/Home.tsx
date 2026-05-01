@@ -1,26 +1,26 @@
-import { useEffect, useState } from 'react'
-import { getJSON } from '../lib/api'
+import { useEffect } from 'react'
 import { useAuth } from '../auth/useAuth'
-
-type Profile = {
-  email: string
-  messages_total: number
-  threads_total: number
-  recent_subjects: string[]
-}
+import { useInbox } from './inbox/useInbox'
+import { useInboxSse } from './inbox/useInboxSse'
+import { InboxList } from './inbox/InboxList'
+import { Pagination } from './inbox/Pagination'
+import { ReloadButton } from './inbox/ReloadButton'
 
 export default function Home() {
   const { state, signOut } = useAuth()
-  const [profile, setProfile] = useState<Profile | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const inbox = useInbox()
 
+  useInboxSse({
+    onApply: inbox.applyThreadUpdates,
+    snapshot: inbox.snapshot,
+  })
+
+  // Hydrate the current page when navigating to a page whose thread ids are
+  // not yet in the display layer.
   useEffect(() => {
-    let cancelled = false
-    getJSON<Profile>('/api/gmail/profile')
-      .then((p) => { if (!cancelled) setProfile(p) })
-      .catch((e) => { if (!cancelled) setError(String(e?.kind ?? e)) })
-    return () => { cancelled = true }
-  }, [])
+    void inbox.hydrateCurrentPage()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inbox.page])
 
   if (state.status !== 'authed') return null
 
@@ -31,28 +31,17 @@ export default function Home() {
         padding: '12px 24px', borderBottom: '1px solid #eee',
       }}>
         <div style={{ fontWeight: 600 }}>inbox concierge</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <ReloadButton />
           <span style={{ fontSize: 14, color: '#444' }}>{state.user.name ?? state.user.email}</span>
           <button onClick={signOut} style={{ fontSize: 13, padding: '6px 10px' }}>sign out</button>
         </div>
       </header>
-      <main style={{ padding: 24, maxWidth: 720 }}>
-        <h2 style={{ marginTop: 0 }}>backend gmail probe</h2>
-        {error && <div style={{ color: '#8a1c25' }}>error: {error}</div>}
-        {!error && !profile && <div>fetching…</div>}
-        {profile && (
-          <div>
-            <div>email: <strong>{profile.email}</strong></div>
-            <div>threads total: {profile.threads_total}</div>
-            <div>messages total: {profile.messages_total}</div>
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontWeight: 600 }}>recent subjects</div>
-              <ul>
-                {profile.recent_subjects.map((s, i) => <li key={i}>{s}</li>)}
-              </ul>
-            </div>
-          </div>
-        )}
+      <main>
+        {inbox.error && <div style={{ color: '#8a1c25', padding: 16 }}>error: {inbox.error}</div>}
+        {!inbox.error && inbox.loading && <div style={{ padding: 24 }}>loading…</div>}
+        {!inbox.loading && <InboxList threads={inbox.pageThreads} />}
+        <Pagination page={inbox.page} pageCount={inbox.pageCount} onChange={inbox.setPage} />
       </main>
     </div>
   )
