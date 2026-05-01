@@ -23,9 +23,10 @@ from app.db.models import User, InboxThread, InboxMessage
 from app.realtime import active_users, sync_lock
 from app.realtime import redis_client as _redis_client
 from app.gmail.client import get_gmail_client
-from app.gmail.parser import assemble_thread, thread_to_string
-from app.inbox import preview_cache
+from app.gmail.parser import ParsedThread, assemble_thread, thread_to_string
+from app.inbox import bucket_repo, preview_cache
 from app.llm import client as llm_client
+from app.llm.classify import classify
 from app.llm.prompts import score_thread
 from app.workers import gmail_sync
 from app.workers.celery_app import celery_app
@@ -348,3 +349,132 @@ def _score_all(gmail, *, candidates: list[dict], name: str, description: str) ->
             "snippet": result["snippet"],
         })
     return out
+
+
+@celery_app.task(name="app.workers.tasks.reclassify_user_inbox", bind=True, max_retries=3)
+def reclassify_user_inbox(self, user_id: str) -> None:
+    """Triggered after POST /api/buckets creates a custom bucket.
+
+    Two-phase:
+      1. Inline reload — partial_sync (or full_sync if no cursor / 404) so the
+         inbox is current BEFORE reclassification. New messages that landed
+         while the user filled out the wizard need to participate.
+      2. Reclassify every InboxThread the user owns against the now-updated
+         bucket set (which now includes the just-created custom bucket). Each
+         thread's existing bucket_id is passed as the stability hint so the
+         LLM only churns threads that genuinely fit the new bucket better.
+
+    Holds sync_lock for the whole task — partial_sync_inbox / full_sync_inbox
+    write under the (user_id, gmail_id) unique constraint and would race a
+    concurrent poll. If the lock is contended at task start we retry with a
+    30s countdown so the work isn't silently dropped.
+    """
+    if not sync_lock.acquire(user_id):
+        log.info("reclassify: user=%s sync_lock held, retrying in 30s", user_id)
+        raise self.retry(countdown=30)
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        if user is None:
+            log.warning("reclassify: user=%s not found", user_id)
+            return
+
+        synced_ids = _inline_reload(db, user=user)
+        reclassified_ids = _reclassify_all(db, user=user)
+
+        touched = list({*synced_ids, *reclassified_ids})
+        log.info("reclassify: user=%s synced=%d reclassified=%d total=%d",
+                 user_id, len(synced_ids), len(reclassified_ids), len(touched))
+        _publish_thread_ids(user_id, touched)
+    finally:
+        db.close()
+        sync_lock.release(user_id)
+
+
+def _inline_reload(db, *, user) -> list[str]:
+    """Bring the user's inbox current. Mirrors poll_new_messages's branching
+    without acquiring sync_lock (caller already holds it). Returns the list
+    of internal thread ids touched by the sync."""
+    if not user.gmail_last_history_id:
+        log.info("reclassify._inline_reload: user=%s no cursor → full sync", user.id)
+        return gmail_sync.full_sync_inbox(db, user=user)
+
+    gmail = get_gmail_client(db, user)
+    try:
+        history_records, new_history_id = gmail_sync.fetch_history_records(
+            gmail, start_history_id=user.gmail_last_history_id,
+        )
+    except gmail_sync.HistoryGoneError:
+        log.info("reclassify._inline_reload: user=%s history 404 → full sync", user.id)
+        return gmail_sync.full_sync_inbox(db, user=user)
+
+    if not history_records:
+        log.info("reclassify._inline_reload: user=%s 0 history records, skip partial",
+                 user.id)
+        return []
+
+    return gmail_sync.partial_sync_inbox(
+        db, user=user,
+        history_records=history_records, new_history_id=new_history_id,
+    )
+
+
+def _reclassify_all(db, *, user) -> list[str]:
+    """Refetch every thread from Gmail, run classify() against the user's
+    full bucket set with existing bucket_ids as stability hints, write back
+    only the rows whose pick changed. Returns internal ids of changed rows.
+
+    Why refetch from Gmail: the DB stores a 150-char body_preview which is
+    not enough for accurate classification (same constraint the draft
+    preview pipeline faces). Sequential fetches at ~200ms each + parallel
+    LLM calls under the shared semaphore.
+    """
+    rows = db.execute(
+        select(InboxThread.id, InboxThread.gmail_id, InboxThread.bucket_id)
+        .where(InboxThread.user_id == user.id)
+    ).all()
+    if not rows:
+        log.info("reclassify._reclassify_all: user=%s no threads", user.id)
+        return []
+
+    log.info("reclassify._reclassify_all: user=%s fetching %d threads from gmail",
+             user.id, len(rows))
+    gmail = get_gmail_client(db, user)
+    parsed_triples: list[tuple[str, str | None, ParsedThread]] = []
+    for internal_id, gmail_thread_id, current_bucket in rows:
+        try:
+            resp = gmail.users().threads().get(
+                userId="me", id=gmail_thread_id, format="full",
+            ).execute()
+            parsed = assemble_thread(
+                thread_id=gmail_thread_id,
+                raw_messages=resp.get("messages", []) or [],
+            )
+            parsed_triples.append((internal_id, current_bucket, parsed))
+        except Exception:
+            log.exception("reclassify: gmail.threads.get failed for %s; skipping",
+                          gmail_thread_id)
+
+    if not parsed_triples:
+        return []
+
+    buckets = bucket_repo.list_active(db, user_id=user.id)
+    threads = [p for _, _, p in parsed_triples]
+    current = [c for _, c, _ in parsed_triples]
+    log.info("reclassify._reclassify_all: user=%s classifying %d threads against %d buckets",
+             user.id, len(threads), len(buckets))
+    new_bucket_ids = classify(threads, buckets, current)
+
+    changed: list[str] = []
+    for (internal_id, old_bucket, _), new_bucket in zip(parsed_triples, new_bucket_ids):
+        if new_bucket == old_bucket:
+            continue
+        thread_row = db.get(InboxThread, internal_id)
+        if thread_row is None:
+            continue
+        thread_row.bucket_id = new_bucket
+        changed.append(internal_id)
+    db.commit()
+    log.info("reclassify._reclassify_all: user=%s %d threads moved buckets",
+             user.id, len(changed))
+    return changed

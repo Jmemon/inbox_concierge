@@ -69,6 +69,11 @@ def create_bucket(body: _CreateBody, user: User = Depends(get_current_user),
     )
     row = bucket_repo.create_custom(db, user_id=user.id, name=body.name, criteria=criteria)
     db.commit()
+    # Reclassify existing inbox threads against the new bucket set so the
+    # custom bucket can pick up matching threads that are already synced.
+    # Async — the user gets 201 immediately, the inbox view updates via the
+    # threads_updated SSE event when the worker finishes.
+    tasks.reclassify_user_inbox.apply_async(args=[user.id], countdown=0)
     return _serialize(row)
 
 

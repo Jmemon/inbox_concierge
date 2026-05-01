@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -28,7 +29,11 @@ def authed(tmp_path):
     db.commit()
     sid = sessions.create_session(db, user_id="u1", ttl_seconds=600)
     c = TestClient(app); c.cookies.set("session", sid)
-    yield c
+    # POST /api/buckets enqueues reclassify_user_inbox; without a real broker,
+    # apply_async would fail. The lifecycle test only cares that the bucket
+    # was created — reclassification correctness is exercised separately.
+    with patch("app.api.buckets.tasks.reclassify_user_inbox.apply_async"):
+        yield c
     app.dependency_overrides.clear(); eng.dispose()
 
 
