@@ -1,6 +1,7 @@
-"""Bucket HTTP API. Four routes: GET / POST / PATCH / DELETE."""
+"""Bucket HTTP API. Four routes: GET / POST / PATCH / DELETE / draft preview."""
 
 import logging
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -8,6 +9,7 @@ from app.db.models import User, Bucket
 from app.db.session import get_db
 from app.deps import get_current_user
 from app.inbox import bucket_repo
+from app.workers import tasks
 
 
 router = APIRouter(prefix="/api", tags=["buckets"])
@@ -88,3 +90,25 @@ def delete_bucket(bucket_id: str, user: User = Depends(get_current_user),
     if b.user_id != user.id: raise HTTPException(403, "not your bucket")
     if b.is_deleted: return
     bucket_repo.soft_delete(db, b); db.commit()
+
+
+class _PreviewBody(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1)
+    exclude_thread_ids: list[str] = Field(default_factory=list)
+
+
+@router.post("/buckets/draft/preview", status_code=202)
+def post_draft_preview(body: _PreviewBody, user: User = Depends(get_current_user)) -> dict:
+    """Enqueue a draft preview scoring job and return a draft_id to poll for results.
+
+    The worker (draft_preview_bucket) scores up to 200 inbox threads against
+    the given name/description and publishes a bucket_draft_preview SSE event
+    keyed on draft_id when done.
+    """
+    draft_id = uuid.uuid4().hex
+    tasks.draft_preview_bucket.apply_async(
+        args=[user.id, draft_id, body.name, body.description, body.exclude_thread_ids],
+        countdown=0,
+    )
+    return {"draft_id": draft_id}
