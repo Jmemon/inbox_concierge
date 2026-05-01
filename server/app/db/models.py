@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, ForeignKey, BigInteger
+from sqlalchemy import String, Text, DateTime, ForeignKey, BigInteger, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -47,6 +47,11 @@ class Bucket(Base):
 
 class InboxThread(Base):
     __tablename__ = "inbox_threads"
+    # Prevents duplicate rows when concurrent Celery tasks (beat + user-triggered reload,
+    # retries after transient errors, etc.) race to insert the same thread for a user.
+    __table_args__ = (
+        UniqueConstraint("user_id", "gmail_id", name="uq_inbox_threads_user_gmail"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
@@ -59,6 +64,10 @@ class InboxThread(Base):
 
 class InboxMessage(Base):
     __tablename__ = "inbox_messages"
+    # Same race-prevention rationale as InboxThread — one message row per (user, gmail_id).
+    __table_args__ = (
+        UniqueConstraint("user_id", "gmail_id", name="uq_inbox_messages_user_gmail"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     thread_id: Mapped[str] = mapped_column(String(36), ForeignKey("inbox_threads.id"), nullable=False, index=True)

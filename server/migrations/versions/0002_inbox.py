@@ -39,7 +39,8 @@ def upgrade() -> None:
     sa.Column('recent_message_id', sa.String(length=36), nullable=True),
     sa.ForeignKeyConstraint(['bucket_id'], ['buckets.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('user_id', 'gmail_id', name='uq_inbox_threads_user_gmail'),
     )
     op.create_index(op.f('ix_inbox_threads_gmail_id'), 'inbox_threads', ['gmail_id'], unique=False)
     op.create_index(op.f('ix_inbox_threads_user_id'), 'inbox_threads', ['user_id'], unique=False)
@@ -56,7 +57,8 @@ def upgrade() -> None:
     sa.Column('body_preview', sa.String(length=200), nullable=True),
     sa.ForeignKeyConstraint(['thread_id'], ['inbox_threads.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('user_id', 'gmail_id', name='uq_inbox_messages_user_gmail'),
     )
     op.create_index(op.f('ix_inbox_messages_gmail_internal_date'), 'inbox_messages', ['gmail_internal_date'], unique=False)
     op.create_index(op.f('ix_inbox_messages_thread_id'), 'inbox_messages', ['thread_id'], unique=False)
