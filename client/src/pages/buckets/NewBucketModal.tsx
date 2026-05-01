@@ -90,7 +90,7 @@ export function NewBucketModal({ onClose, onSave }: {
             </div>
           </div>
         )}
-        {step === 'pending' && <div style={{ marginTop: 16 }}>scanning your inbox… (~30-60s)</div>}
+        {step === 'pending' && <div style={{ marginTop: 16 }}>Scanning your inbox, give ~1min</div>}
         {step === 'review' && (
           <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 12, color: '#666', marginBottom: 12 }}>{HINT}</div>
