@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.api.auth import router as auth_router
+from app.api.buckets import router as buckets_router
 from app.api.gmail import router as gmail_router
 from app.api.inbox import router as inbox_router
 from app.api.sse import router as sse_router
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="inbox_concierge", lifespan=lifespan)
 app.include_router(auth_router)
+app.include_router(buckets_router)
 app.include_router(gmail_router)
 app.include_router(inbox_router)
 app.include_router(sse_router)
