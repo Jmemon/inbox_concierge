@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   type Bucket, type BucketExampleIn,
-  getBuckets, createBucket, patchBucket, deleteBucket, postBucketDraftPreview,
+  getBuckets, createBucket, patchBucket, deleteBucket,
 } from '../../lib/api'
 
 
@@ -33,11 +33,5 @@ export function useBuckets() {
     await deleteBucket(id); await refresh()
   }, [refresh])
 
-  const previewDraft = useCallback(
-    (body: { name: string; description: string; exclude_thread_ids?: string[] }) =>
-      postBucketDraftPreview(body),
-    [],
-  )
-
-  return { buckets, byId, customBuckets, loading, refresh, create, rename, softDelete, previewDraft }
+  return { buckets, byId, customBuckets, loading, refresh, create, rename, softDelete }
 }

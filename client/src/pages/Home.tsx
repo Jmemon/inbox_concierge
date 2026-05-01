@@ -11,7 +11,7 @@ import { NewBucketModal } from './buckets/NewBucketModal'
 
 export default function Home() {
   const { state, signOut } = useAuth()
-  const { buckets, byId: bucketsById, rename, softDelete } = useBuckets()
+  const { buckets, byId: bucketsById, create, rename, softDelete } = useBuckets()
   const [filterSelection, setFilterSelection] = useState<Set<string> | null>(null)
   const [showView, setShowView] = useState(false)
   const [showNew, setShowNew] = useState(false)
@@ -63,7 +63,7 @@ export default function Home() {
 
       {showView && <ViewBucketsModal buckets={buckets} onClose={() => setShowView(false)}
                                        onRename={rename} onDelete={softDelete} />}
-      {showNew && <NewBucketModal onClose={() => setShowNew(false)} />}
+      {showNew && <NewBucketModal onClose={() => setShowNew(false)} onSave={create} />}
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { subscribeSse, type PreviewExample } from '../../lib/sse'
-import { useBuckets } from './useBuckets'
+import { postBucketDraftPreview, type Bucket, type BucketExampleIn } from '../../lib/api'
 
 type Choice = 'positive' | 'near_miss' | 'rejected'
 type ExampleState = PreviewExample & { initial: Exclude<Choice, 'rejected'>; choice: Choice }
@@ -9,8 +9,17 @@ type ExampleState = PreviewExample & { initial: Exclude<Choice, 'rejected'>; cho
 const HINT = "We recommend confirming at least 2 positives + 2 near-misses before saving — but it's not required."
 
 
-export function NewBucketModal({ onClose }: { onClose: () => void }) {
-  const { create, previewDraft } = useBuckets()
+// onSave is owned by Home's useBuckets instance so its bucket list refreshes
+// after creation. Calling useBuckets() here would create a separate state
+// instance that nobody renders from, leaving the toolbar/filter dropdown
+// stale until a page reload.
+export function NewBucketModal({ onClose, onSave }: {
+  onClose: () => void
+  onSave: (body: {
+    name: string; description: string
+    confirmed_positives: BucketExampleIn[]; confirmed_negatives: BucketExampleIn[]
+  }) => Promise<Bucket>
+}) {
   const [step, setStep] = useState<'form' | 'pending' | 'review'>('form')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -32,12 +41,12 @@ export function NewBucketModal({ onClose }: { onClose: () => void }) {
   }, [draftId])
 
   async function startPreview() {
-    const { draft_id } = await previewDraft({ name, description, exclude_thread_ids: seenIds })
+    const { draft_id } = await postBucketDraftPreview({ name, description, exclude_thread_ids: seenIds })
     setDraftId(draft_id); setStep('pending')
   }
 
   async function moreExamples() {
-    const { draft_id } = await previewDraft({ name, description, exclude_thread_ids: seenIds })
+    const { draft_id } = await postBucketDraftPreview({ name, description, exclude_thread_ids: seenIds })
     setDraftId(draft_id); setStep('pending')
   }
 
@@ -48,7 +57,7 @@ export function NewBucketModal({ onClose }: { onClose: () => void }) {
   async function save() {
     const positives = examples.filter(e => e.choice === 'positive').map(toExampleIn)
     const negatives = examples.filter(e => e.choice === 'near_miss').map(toExampleIn)
-    await create({ name, description, confirmed_positives: positives, confirmed_negatives: negatives })
+    await onSave({ name, description, confirmed_positives: positives, confirmed_negatives: negatives })
     onClose()
   }
 
