@@ -1,136 +1,136 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
-import { getInbox, getThreadsBatch, type InboxThread } from '../../lib/api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getInbox, getThreadsBatch, postInboxExtend, type Bucket, type InboxThread } from '../../lib/api'
+import { subscribeSse } from '../../lib/sse'
+
 
 const PAGE_SIZE = 50
 const SNAPSHOT_LIMIT = 200
+const UNCLASSIFIED = 'unclassified'
 
 type IdLayer = string[]
 type DisplayLayer = Record<string, InboxThread>
 
-export type UseInbox = {
-  loading: boolean
-  error: string | null
-  asOf: number
-  idLayer: IdLayer
-  displayLayer: DisplayLayer
-  page: number
-  pageCount: number
-  pageThreads: InboxThread[]
-  setPage: (n: number) => void
-  snapshot: () => Promise<void>
-  applyThreadUpdates: (ids: string[]) => Promise<void>
-  hydrateCurrentPage: () => Promise<void>
-}
 
-export function useInbox(): UseInbox {
+export function useInbox(opts: {
+  buckets: Bucket[]
+  filterSelection: Set<string> | null
+}) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [asOf, setAsOf] = useState<number>(0)
   const [idLayer, setIdLayer] = useState<IdLayer>([])
   const [displayLayer, setDisplayLayer] = useState<DisplayLayer>({})
   const [page, setPage] = useState(1)
+  const [more, setMore] = useState<boolean | null>(null)
+  const [extendInFlight, setExtendInFlight] = useState(false)
 
-  // Used to drop out-of-order GET /threads responses (per spec).
   const lastInternalDate = useRef<Record<string, number>>({})
 
   const snapshot = useCallback(async () => {
-    console.log('[useInbox] snapshot starting')
-    setLoading(true)
-    setError(null)
+    setLoading(true); setError(null)
     try {
-      const resp = await getInbox({ limit: SNAPSHOT_LIMIT })
-      console.log('[useInbox] snapshot result: thread count=', resp.threads.length, 'as_of=', resp.as_of)
+      const r = await getInbox({ limit: SNAPSHOT_LIMIT })
       const order: string[] = []
       const display: DisplayLayer = {}
-      for (const t of resp.threads) {
-        order.push(t.id)
-        display[t.id] = t
+      for (const t of r.threads) {
+        order.push(t.id); display[t.id] = t
         if (t.recent_message) lastInternalDate.current[t.id] = t.recent_message.internal_date
       }
-      setIdLayer(order)
-      setDisplayLayer(display)
-      setAsOf(resp.as_of)
-    } catch (e: any) {
-      console.error('[useInbox] snapshot error', e)
-      setError(String(e?.kind ?? e?.message ?? e))
-    } finally {
-      setLoading(false)
-    }
+      setIdLayer(order); setDisplayLayer(display)
+    } catch (e: any) { setError(String(e?.kind ?? e?.message ?? e)) }
+    finally { setLoading(false) }
   }, [])
 
   const applyThreadUpdates = useCallback(async (ids: string[]) => {
-    console.log('[useInbox] applyThreadUpdates entry id count=', ids.length)
     if (ids.length === 0) return
     let fetched: InboxThread[] = []
-    try {
-      fetched = await getThreadsBatch(ids)
-    } catch (e) {
-      // A failed batch is non-fatal: keep current state, surface to console.
-      // The next SSE event or reload will re-attempt.
-      console.error('[useInbox] batch fetch failed', e)
-      return
-    }
-
-    // Pre-compute which threads are actually newer than what we have. Doing
-    // this BEFORE the setState updaters keeps the updaters pure — the lastInt-
-    // ernalDate ref is mutated exactly once per call, not once per strict-mode
-    // re-run of the updater.
+    try { fetched = await getThreadsBatch(ids) } catch { return }
     const accepted: InboxThread[] = []
-    const dropped: InboxThread[] = []
     for (const t of fetched) {
       const incoming = t.recent_message?.internal_date ?? 0
       const have = lastInternalDate.current[t.id] ?? 0
       if (incoming >= have) {
         accepted.push(t)
         if (t.recent_message) lastInternalDate.current[t.id] = incoming
-      } else {
-        dropped.push(t)
       }
     }
-    console.log('[useInbox] applyThreadUpdates accepted=', accepted.length, 'dropped (out-of-order)=', dropped.length)
     if (accepted.length === 0) return
-
-    setDisplayLayer((prev) => {
-      const next = { ...prev }
-      for (const t of accepted) next[t.id] = t
-      return next
-    })
-
-    setIdLayer((prev) => {
-      const merged = new Set(prev)
-      for (const t of accepted) merged.add(t.id)
-      // Re-sort by recent_message.internal_date desc; threads with no recent_message sink.
-      const arr = [...merged]
-      arr.sort((a, b) => {
-        const da = lastInternalDate.current[a] ?? 0
-        const db = lastInternalDate.current[b] ?? 0
-        return db - da
-      })
-      console.log('[useInbox] applyThreadUpdates new idLayer length=', arr.length)
-      return arr
+    setDisplayLayer(prev => { const n = { ...prev }; for (const t of accepted) n[t.id] = t; return n })
+    setIdLayer(prev => {
+      const merged = new Set(prev); for (const t of accepted) merged.add(t.id)
+      return [...merged].sort((a, b) =>
+        (lastInternalDate.current[b] ?? 0) - (lastInternalDate.current[a] ?? 0))
     })
   }, [])
+
+  // Subscribe to extend_complete to update `more` and hydrate the new ids.
+  useEffect(() => {
+    return subscribeSse((e) => {
+      if (e.event !== 'extend_complete') return
+      setMore(e.more)
+      setExtendInFlight(false)
+      void applyThreadUpdates(e.thread_ids)
+    })
+  }, [applyThreadUpdates])
+
+  const requestExtend = useCallback(async () => {
+    if (extendInFlight || more === false) return
+    if (idLayer.length === 0) return
+    let smallest = Number.MAX_SAFE_INTEGER
+    for (const id of idLayer) {
+      const t = displayLayer[id]
+      const d = t?.recent_message?.internal_date
+      if (d && d < smallest) smallest = d
+    }
+    if (smallest === Number.MAX_SAFE_INTEGER) return
+    setExtendInFlight(true)
+    try { await postInboxExtend(smallest) }
+    catch { setExtendInFlight(false) }
+  }, [extendInFlight, more, idLayer, displayLayer])
+
+  // Filtered id layer: walk idLayer in order, keep only ids whose displayLayer
+  // row's resolved bucket key matches the active filter set.
+  const filteredIdLayer = useMemo(() => {
+    if (!opts.filterSelection) return idLayer
+    const activeIds = new Set(opts.buckets.map(b => b.id))
+    const sel = opts.filterSelection
+    return idLayer.filter((id) => {
+      const t = displayLayer[id]
+      if (!t) return false
+      const bid = t.bucket_id
+      const key = (bid === null || !activeIds.has(bid)) ? UNCLASSIFIED : bid
+      return sel.has(key)
+    })
+  }, [idLayer, displayLayer, opts.filterSelection, opts.buckets])
+
+  const pageCount = Math.max(1, Math.ceil(filteredIdLayer.length / PAGE_SIZE))
+  const pageThreads = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return filteredIdLayer.slice(start, start + PAGE_SIZE)
+      .map(id => displayLayer[id]).filter(Boolean)
+  }, [page, filteredIdLayer, displayLayer])
+
+  // Auto-extend trigger: when on the last page and it's partial, AND server
+  // hasn't told us we're at the bottom of inbox history.
+  useEffect(() => {
+    if (more === false || extendInFlight) return
+    const start = (page - 1) * PAGE_SIZE
+    const remaining = filteredIdLayer.length - start
+    if (remaining < PAGE_SIZE && !opts.filterSelection) {
+      // Only auto-extend when no filter active (filter could artificially shrink the page).
+      void requestExtend()
+    }
+  }, [page, filteredIdLayer.length, more, extendInFlight, opts.filterSelection, requestExtend])
 
   const hydrateCurrentPage = useCallback(async () => {
     const start = (page - 1) * PAGE_SIZE
     const ids = idLayer.slice(start, start + PAGE_SIZE)
-    const missing = ids.filter((id) => !(id in displayLayer))
-    console.log('[useInbox] hydrateCurrentPage page=', page, 'missing=', missing.length)
-    if (missing.length === 0) return
-    await applyThreadUpdates(missing)
+    const missing = ids.filter(id => !(id in displayLayer))
+    if (missing.length > 0) await applyThreadUpdates(missing)
   }, [page, idLayer, displayLayer, applyThreadUpdates])
 
-  const pageCount = Math.max(1, Math.ceil(idLayer.length / PAGE_SIZE))
-  const pageThreads = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE
-    return idLayer.slice(start, start + PAGE_SIZE).map((id) => displayLayer[id]).filter(Boolean)
-  }, [page, idLayer, displayLayer])
-
   return {
-    loading, error, asOf,
-    idLayer, displayLayer,
-    page, pageCount, pageThreads,
-    setPage,
-    snapshot, applyThreadUpdates, hydrateCurrentPage,
+    loading, error, idLayer, displayLayer, page, pageCount, pageThreads,
+    setPage, snapshot, applyThreadUpdates, hydrateCurrentPage,
+    more, requestExtend,
   }
 }
