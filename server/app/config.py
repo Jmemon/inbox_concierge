@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     )
 
     database_url: str = Field(alias="DATABASE_URL")
+    redis_url: str = Field(alias="REDIS_URL")
     session_secret: str = Field(alias="SESSION_SECRET")
     encryption_key: str = Field(alias="ENCRYPTION_KEY")
     session_ttl_seconds: int = Field(default=60 * 60 * 24 * 30, alias="SESSION_TTL_SECONDS")
