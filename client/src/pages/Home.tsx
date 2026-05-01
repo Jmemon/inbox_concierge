@@ -3,7 +3,6 @@ import { useAuth } from '../auth/useAuth'
 import { useInbox } from './inbox/useInbox'
 import { useInboxSse } from './inbox/useInboxSse'
 import { InboxList } from './inbox/InboxList'
-import { Pagination } from './inbox/Pagination'
 import { useBuckets } from './buckets/useBuckets'
 import { SecondaryHeader } from './buckets/SecondaryHeader'
 import { ViewBucketsModal } from './buckets/ViewBucketsModal'
@@ -39,20 +38,21 @@ export default function Home() {
         </div>
       </header>
 
-      {/* SecondaryHeader owns the reload button, filter dropdown, and bucket controls.
-          The old top-bar ReloadButton import is intentionally removed. */}
+      {/* SecondaryHeader owns the reload button, filter dropdown, bucket controls,
+          and (right-aligned) the pagination row for the inbox list. */}
       <SecondaryHeader
         buckets={buckets} filterSelection={filterSelection}
         onFilterChange={setFilterSelection}
         onViewBuckets={() => setShowView(true)}
         onNewBucket={() => setShowNew(true)}
+        page={inbox.page} pageCount={inbox.pageCount}
+        extending={inbox.extendInFlight} onPageChange={inbox.setPage}
       />
 
       <main>
         {inbox.error && <div style={{ color: '#8a1c25', padding: 16 }}>error: {inbox.error}</div>}
         {!inbox.error && inbox.loading && <div style={{ padding: 24 }}>loading…</div>}
         {!inbox.loading && <InboxList threads={inbox.pageThreads} bucketsById={bucketsById} />}
-        <Pagination page={inbox.page} pageCount={inbox.pageCount} onChange={inbox.setPage} />
         {inbox.more === false && (
           <div style={{ padding: 12, fontSize: 12, color: '#888', textAlign: 'center' }}>
             (end of inbox history)

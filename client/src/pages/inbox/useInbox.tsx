@@ -27,6 +27,11 @@ export function useInbox(opts: {
   const [extendInFlight, setExtendInFlight] = useState(false)
 
   const lastInternalDate = useRef<Record<string, number>>({})
+  // No-progress guard: remembers the idLayer.length at which we last fired an
+  // auto-extend. Blocks a tight retry loop if the server replies with 0 new
+  // ids (length unchanged → guard locked). Re-arms naturally when new ids land
+  // because length grows past the stored value.
+  const lastExtendAtLength = useRef<number | null>(null)
 
   const snapshot = useCallback(async () => {
     setLoading(true); setError(null)
@@ -112,14 +117,20 @@ export function useInbox(opts: {
       .map(id => displayLayer[id]).filter(Boolean)
   }, [page, filteredIdLayer, displayLayer])
 
-  // Auto-extend trigger: when the user is on (or past) the last page and the
-  // server hasn't told us we're at the bottom of inbox history. Filter active
-  // means we don't auto-extend (filter can artificially shrink the page count).
+  // Auto-extend trigger: fires when the user reaches the page-before-last (or
+  // the last page) so the next batch is in flight before they need it. Skipped
+  // when the server says no more history, when an extend is already running,
+  // or when a filter is active (filter can artificially shrink page count).
+  // The lastExtendAtLength ref blocks re-firing at the same idLayer size, so a
+  // 0-result extend doesn't loop.
   useEffect(() => {
     if (more === false || extendInFlight) return
     if (opts.filterSelection) return
-    if (page >= pageCount) void requestExtend()
-  }, [page, pageCount, more, extendInFlight, opts.filterSelection, requestExtend])
+    if (page < pageCount - 1) return
+    if (lastExtendAtLength.current === idLayer.length) return
+    lastExtendAtLength.current = idLayer.length
+    void requestExtend()
+  }, [page, pageCount, more, extendInFlight, opts.filterSelection, idLayer.length, requestExtend])
 
   const hydrateCurrentPage = useCallback(async () => {
     const start = (page - 1) * PAGE_SIZE
@@ -131,6 +142,6 @@ export function useInbox(opts: {
   return {
     loading, error, idLayer, displayLayer, page, pageCount, pageThreads,
     setPage, snapshot, applyThreadUpdates, hydrateCurrentPage,
-    more, requestExtend,
+    more, requestExtend, extendInFlight,
   }
 }
