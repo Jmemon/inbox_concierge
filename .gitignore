@@ -25,3 +25,6 @@ server/app/static/
 .DS_Store
 .idea/
 .vscode/
+
+# local-only scripts
+scripts/seed_demo.py
