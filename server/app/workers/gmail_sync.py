@@ -104,6 +104,11 @@ def fetch_history_records(
             userId="me",
             startHistoryId=start_history_id,
             historyTypes=["messageAdded"],
+            # Without this, sending a message fires a messageAdded event for the SENT
+            # label and gets ingested as if it were inbox mail, which then surfaces in
+            # the UI as a thread "from a different address". Singular labelId per the
+            # users.history.list API contract (vs labelIds plural on threads.list).
+            labelId="INBOX",
         ).execute()
     except HttpError as e:
         if getattr(e.resp, "status", None) == 404:
@@ -215,7 +220,12 @@ def full_sync_inbox(db: Session, *, user: User) -> list[str]:
     inbox_repo.clear_user_inbox(db, user_id=user.id)
     db.flush()
 
-    listing = gmail.users().threads().list(userId="me", maxResults=200).execute()
+    # labelIds=["INBOX"] scopes to threads with at least one inbox-labeled message,
+    # matching Gmail's own "Inbox" view. Without it threads.list returns the All Mail
+    # universe (SENT, DRAFTS, etc.), so anything you sent surfaces in the inbox table.
+    listing = gmail.users().threads().list(
+        userId="me", maxResults=200, labelIds=["INBOX"],
+    ).execute()
     thread_stubs = listing.get("threads", []) or []
     log.info("full_sync_inbox: user=%s listing returned %d thread stubs", user.id, len(thread_stubs))
 
@@ -265,7 +275,7 @@ def extend_inbox_history(db: Session, *, user: User, before_internal_date_ms: in
     gmail = get_gmail_client(db, user)
     before_secs = before_internal_date_ms // 1000
     listing = gmail.users().threads().list(
-        userId="me", q=f"before:{before_secs}", maxResults=200,
+        userId="me", q=f"before:{before_secs}", maxResults=200, labelIds=["INBOX"],
     ).execute()
     stubs = listing.get("threads", []) or []
 
